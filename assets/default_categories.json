@@ -1,0 +1,58 @@
+[
+  {
+    "id": "cat-food",
+    "name": "Food",
+    "colorHex": "#FF6384",
+    "iconName": "restaurant",
+    "isDefault": true
+  },
+  {
+    "id": "cat-transport",
+    "name": "Transport",
+    "colorHex": "#36A2EB",
+    "iconName": "directions_car",
+    "isDefault": true
+  },
+  {
+    "id": "cat-entertainment",
+    "name": "Entertainment",
+    "colorHex": "#FFCE56",
+    "iconName": "movie",
+    "isDefault": true
+  },
+  {
+    "id": "cat-health",
+    "name": "Health",
+    "colorHex": "#4BC0C0",
+    "iconName": "local_hospital",
+    "isDefault": true
+  },
+  {
+    "id": "cat-shopping",
+    "name": "Shopping",
+    "colorHex": "#9966FF",
+    "iconName": "shopping_bag",
+    "isDefault": true
+  },
+  {
+    "id": "cat-housing",
+    "name": "Housing",
+    "colorHex": "#FF9F40",
+    "iconName": "home",
+    "isDefault": true
+  },
+  {
+    "id": "cat-education",
+    "name": "Education",
+    "colorHex": "#00CC99",
+    "iconName": "school",
+    "isDefault": true
+  },
+  {
+    "id": "cat-other",
+    "name": "Other",
+    "colorHex": "#C9CBCF",
+    "iconName": "more_horiz",
+    "isDefault": true
+  }
+]

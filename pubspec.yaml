@@ -1,0 +1,32 @@
+name: expense_tracker
+description: "A local-first cross-platform expense tracker."
+publish_to: 'none'
+version: 1.0.1+2
+
+environment:
+  sdk: ^3.11.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^2.6.1
+  path_provider: ^2.1.4
+  uuid: ^4.4.2
+  fl_chart: ^1.1.1
+  intl: ^0.20.2
+  flutter_colorpicker: ^1.1.0
+  shared_preferences: ^2.5.4
+  flutter_secure_storage: ^9.2.4
+  file_picker: ^8.1.2
+  excel: ^4.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/default_categories.json
