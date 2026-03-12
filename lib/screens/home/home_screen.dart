@@ -1,3 +1,4 @@
+import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
@@ -5,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:open_file/open_file.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/expense.dart';
 import '../../models/category.dart';
@@ -502,7 +504,10 @@ class HomeScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _deleteAllYearsExpenses(BuildContext context, WidgetRef ref) async {
+  Future<void> _deleteAllYearsExpenses(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final allExpenses = ref.read(expenseProvider).valueOrNull ?? <Expense>[];
     if (allExpenses.isEmpty) {
       if (context.mounted) {
@@ -564,7 +569,9 @@ class HomeScreen extends ConsumerWidget {
 
     if (confirmed != true) return;
 
-    final deleted = await ref.read(expenseProvider.notifier).deleteAllExpenses();
+    final deleted = await ref
+        .read(expenseProvider.notifier)
+        .deleteAllExpenses();
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -576,6 +583,197 @@ class HomeScreen extends ConsumerWidget {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _exportExpensesToExcel(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final allExpenses = ref.read(expenseProvider).valueOrNull ?? <Expense>[];
+    if (allExpenses.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('No expenses to export.')));
+      }
+      return;
+    }
+
+    final categories = ref.read(categoryProvider).valueOrNull ?? <Category>[];
+    final categoryById = <String, Category>{
+      for (final c in categories) c.id: c,
+    };
+
+    // Group expenses by year-month
+    final Map<DateTime, List<Expense>> monthGroups = {};
+    for (final expense in allExpenses) {
+      final monthKey = DateTime(expense.date.year, expense.date.month);
+      monthGroups.putIfAbsent(monthKey, () => []).add(expense);
+    }
+
+    // Sort months in ascending order
+    final sortedMonths = monthGroups.keys.toList()..sort();
+
+    // Create Excel workbook
+    final excel = Excel.createExcel();
+    excel.delete('Sheet1'); // Remove default sheet
+
+    // Create a sheet for each month
+    for (final monthKey in sortedMonths) {
+      final expenses = monthGroups[monthKey]!;
+      final monthLabel = DateFormat('MMM yyyy').format(monthKey).toUpperCase();
+      final sheet = excel[monthLabel];
+
+      // Group expenses by category within the month
+      final Map<String, List<Expense>> categoryGroups = {};
+      for (final expense in expenses) {
+        final category = categoryById[expense.categoryId];
+        final categoryName = category?.name ?? 'Uncategorized';
+        categoryGroups.putIfAbsent(categoryName, () => []).add(expense);
+      }
+
+      final sortedCategories = categoryGroups.keys.toList()..sort();
+
+      // Add headers
+      const headers = ['Category', 'Date', 'Expense', 'Amount'];
+      for (int i = 0; i < headers.length; i++) {
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
+          ..value = TextCellValue(headers[i])
+          ..cellStyle = CellStyle(bold: true);
+      }
+
+      // Add expense rows grouped by category
+      var rowIndex = 1;
+      for (final categoryName in sortedCategories) {
+        final categoryExpenses = categoryGroups[categoryName]!
+          ..sort((a, b) => b.date.compareTo(a.date)); // Sort by date descending
+
+        double categoryTotal = 0;
+
+        for (final expense in categoryExpenses) {
+          final row = [
+            TextCellValue(categoryName),
+            TextCellValue(DateFormat('dd MMM yyyy').format(expense.date)),
+            TextCellValue(expense.title),
+            DoubleCellValue(expense.amount),
+          ];
+          sheet.appendRow(row);
+          rowIndex++;
+          categoryTotal += expense.amount;
+        }
+
+        // Add category subtotal row
+        final subtotalRow = [
+          TextCellValue('$categoryName - Subtotal'),
+          TextCellValue(''),
+          TextCellValue(''),
+          DoubleCellValue(categoryTotal),
+        ];
+        sheet.appendRow(subtotalRow);
+        final subtotalRowIndex = rowIndex;
+        for (int i = 0; i < 4; i++) {
+          final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: subtotalRowIndex));
+          cell.cellStyle = CellStyle(bold: true);
+        }
+        rowIndex++;
+      }
+
+      // Add total row
+      final monthTotal = expenses.fold(0.0, (sum, e) => sum + e.amount);
+      final totalRow = [
+        TextCellValue('TOTAL FOR $monthLabel'),
+        TextCellValue(''),
+        TextCellValue(''),
+        DoubleCellValue(monthTotal),
+      ];
+      sheet.appendRow(totalRow);
+      final totalRowIndex = rowIndex;
+      for (int i = 0; i < 4; i++) {
+        final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: totalRowIndex));
+        cell.cellStyle = CellStyle(bold: true);
+      }
+
+      // Auto-fit columns
+      sheet.setColumnWidth(0, 20);
+      sheet.setColumnWidth(1, 15);
+      sheet.setColumnWidth(2, 25);
+      sheet.setColumnWidth(3, 12);
+    }
+
+    // Save the file
+    try {
+      // Get Downloads directory based on platform
+      final String downloadsPath;
+      if (io.Platform.isAndroid) {
+        downloadsPath = '/storage/emulated/0/Download';
+      } else {
+        final homeDir = io.Platform.environment['HOME'] ?? '';
+        if (homeDir.isEmpty) {
+          throw 'Could not determine home directory';
+        }
+        downloadsPath = '$homeDir/Downloads';
+      }
+      final downloadsDir = io.Directory(downloadsPath);
+      await downloadsDir.create(recursive: true);
+
+      final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final fileName = 'ExpenseTracker_Export_$timestamp.xlsx';
+      final filePath = '$downloadsPath/$fileName';
+
+      final fileBytes = excel.encode();
+      if (fileBytes != null) {
+        final file = io.File(filePath);
+        await file.writeAsBytes(fileBytes);
+
+        if (context.mounted) {
+          final openFile = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Export Successful'),
+              content: Text(
+                'File saved to:\n$fileName\n\nWould you like to open it now?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Close'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Open'),
+                ),
+              ],
+            ),
+          );
+
+          if (openFile == true && context.mounted) {
+            try {
+              final exportedFile = io.File(filePath);
+              final exists = await exportedFile.exists();
+              if (exists) {
+                await OpenFile.open(filePath, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('File not found. Please check your Downloads folder.')),
+                );
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Could not open file: $e')),
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+      }
     }
   }
 
@@ -679,11 +877,13 @@ class HomeScreen extends ConsumerWidget {
       floatingActionButton: _ExpandableHomeFab(
         onAddExpense: () => _openAddExpense(context),
         onImportExpenses: () => _importExpensesFromExcel(context, ref),
+        onExportExpenses: () => _exportExpensesToExcel(context, ref),
         onDeleteMonthlyExpenses: () =>
             _deleteMonthlyExpenses(context, ref, selectedMonth),
         onDeleteAllYearsExpenses: () => _deleteAllYearsExpenses(context, ref),
         canDeleteMonthlyExpenses: monthExpenseCount > 0,
-        canDeleteAllYearsExpenses: (expensesAsync.valueOrNull ?? const []).isNotEmpty,
+        canDeleteAllYearsExpenses:
+            (expensesAsync.valueOrNull ?? const []).isNotEmpty,
       ),
     );
   }
@@ -692,6 +892,7 @@ class HomeScreen extends ConsumerWidget {
 class _ExpandableHomeFab extends StatefulWidget {
   final Future<void> Function() onAddExpense;
   final Future<void> Function() onImportExpenses;
+  final Future<void> Function() onExportExpenses;
   final Future<void> Function() onDeleteMonthlyExpenses;
   final Future<void> Function() onDeleteAllYearsExpenses;
   final bool canDeleteMonthlyExpenses;
@@ -700,6 +901,7 @@ class _ExpandableHomeFab extends StatefulWidget {
   const _ExpandableHomeFab({
     required this.onAddExpense,
     required this.onImportExpenses,
+    required this.onExportExpenses,
     required this.onDeleteMonthlyExpenses,
     required this.onDeleteAllYearsExpenses,
     required this.canDeleteMonthlyExpenses,
@@ -749,6 +951,12 @@ class _ExpandableHomeFabState extends State<_ExpandableHomeFab> {
                       label: 'Import from Excel',
                       icon: Icons.file_upload_outlined,
                       onPressed: () => _runAction(widget.onImportExpenses),
+                    ),
+                    const SizedBox(height: 10),
+                    _FabActionRow(
+                      label: 'Export to Excel',
+                      icon: Icons.file_download_outlined,
+                      onPressed: () => _runAction(widget.onExportExpenses),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
