@@ -1,7 +1,7 @@
 name: expense_tracker
 description: "A local-first cross-platform expense tracker."
 publish_to: 'none'
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ^3.11.1
@@ -18,6 +18,7 @@ dependencies:
   flutter_colorpicker: ^1.1.0
   shared_preferences: ^2.5.4
   flutter_secure_storage: ^9.2.4
+  cryptography: ^2.7.0
   file_picker: ^8.1.2
   excel: ^4.0.6
   open_file: ^3.5.10

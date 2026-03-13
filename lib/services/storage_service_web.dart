@@ -3,3 +3,4 @@
 
 Future<List<Map<String, dynamic>>> readFromFile(String key) async => [];
 Future<void> writeToFile(String key, List<Map<String, dynamic>> data) async {}
+Future<int> readFileBytesForKey(String key) async => 0;

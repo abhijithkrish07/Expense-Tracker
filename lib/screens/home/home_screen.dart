@@ -22,6 +22,7 @@ import '../expense/add_edit_expense_screen.dart';
 import '../analytics/analytics_screen.dart';
 import '../categories/categories_screen.dart';
 import '../budget/budget_settings_screen.dart';
+import 'storage_insights_screen.dart';
 
 // Selected month for home screen
 final homeMonthProvider = StateProvider<DateTime>((ref) {
@@ -133,10 +134,6 @@ class HomeScreen extends ConsumerWidget {
     for (final entry in excel.tables.entries) {
       final sheetName = entry.key;
       final sheet = entry.value;
-      if (sheet == null) {
-        skippedSheetCount++;
-        continue;
-      }
 
       final monthDate = _inferMonthDateFromSheetName(sheetName);
       if (monthDate == null) {
@@ -751,6 +748,7 @@ class HomeScreen extends ConsumerWidget {
             try {
               final exportedFile = io.File(filePath);
               final exists = await exportedFile.exists();
+              if (!context.mounted) return;
               if (exists) {
                 await OpenFile.open(filePath, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
               } else {
@@ -777,6 +775,7 @@ class HomeScreen extends ConsumerWidget {
     }
   }
 
+  @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selectedMonth = ref.watch(homeMonthProvider);
     final expensesAsync = ref.watch(expenseProvider);
@@ -1437,6 +1436,17 @@ class _AppDrawer extends ConsumerWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const BudgetSettingsScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.storage_outlined),
+            title: const Text('Storage Insights'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const StorageInsightsScreen()),
               );
             },
           ),

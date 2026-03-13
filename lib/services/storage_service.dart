@@ -16,6 +16,15 @@ class StorageService {
   static const _budgetsKey = 'budgets';
   static const _themeModeKey = 'theme_mode';
 
+  static const _legacyMigratedPrefix = 'legacy_migrated_';
+  static const _insightsHistoryKey = 'storage_insights_history_v1';
+  static const _maxInsightSnapshots = 30;
+  static const _trackedDataKeys = <String>[
+    _expensesKey,
+    _categoriesKey,
+    _budgetsKey,
+  ];
+
   // Secure storage for sensitive financial data on native platforms
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -27,8 +36,8 @@ class StorageService {
       // Web: use SharedPreferences (no secure storage available)
       return readFromPrefs(key);
     } else {
-      // Native: use encrypted secure storage for financial data
-      return _readSecure(key);
+      // Native: encrypted + compressed file storage
+      return _readNativeWithMigration(key);
     }
   }
 
@@ -36,8 +45,29 @@ class StorageService {
     if (kIsWeb) {
       await writeToPrefs(key, data);
     } else {
-      await _writeSecure(key, data);
+      await writeToFile(key, data);
+      await _secureStorage.delete(key: key);
     }
+  }
+
+  Future<List<Map<String, dynamic>>> _readNativeWithMigration(String key) async {
+    final fromFile = await readFromFile(key);
+    if (fromFile.isNotEmpty) {
+      return fromFile;
+    }
+
+    final migrationMarker = await _secureStorage.read(
+      key: '$_legacyMigratedPrefix$key',
+    );
+    if (migrationMarker == '1') {
+      return fromFile;
+    }
+
+    final migrated = await _readSecure(key);
+    await writeToFile(key, migrated);
+    await _secureStorage.write(key: '$_legacyMigratedPrefix$key', value: '1');
+    await _secureStorage.delete(key: key);
+    return migrated;
   }
 
   Future<List<Map<String, dynamic>>> _readSecure(String key) async {
@@ -48,10 +78,6 @@ class StorageService {
     } catch (_) {
       return [];
     }
-  }
-
-  Future<void> _writeSecure(String key, List<Map<String, dynamic>> data) async {
-    await _secureStorage.write(key: key, value: jsonEncode(data));
   }
 
   Future<List<Expense>> loadExpenses() async {
@@ -90,6 +116,204 @@ class StorageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_themeModeKey, mode);
   }
+
+  Future<StorageInsights> loadStorageInsights() async {
+    final buckets = <StorageBucketInsight>[];
+
+    for (final key in _trackedDataKeys) {
+      final data = await _read(key);
+      final rawBytes = utf8.encode(jsonEncode(data)).length;
+      final persistedBytes = await readStoredBytesForKey(key);
+
+      buckets.add(
+        StorageBucketInsight(
+          key: key,
+          label: _displayLabelForKey(key),
+          rawBytes: rawBytes,
+          persistedBytes: persistedBytes,
+        ),
+      );
+    }
+
+    return StorageInsights(buckets: buckets);
+  }
+
+  Future<StorageInsightsWithHistory> loadStorageInsightsWithHistory() async {
+    final current = await loadStorageInsights();
+    final previous = await _loadInsightHistory();
+    final now = DateTime.now();
+
+    final updated = List<StorageInsightSnapshot>.from(previous);
+    if (updated.isEmpty) {
+      updated.add(
+        StorageInsightSnapshot(
+          measuredAt: now,
+          rawBytes: current.totalRawBytes,
+          persistedBytes: current.totalPersistedBytes,
+        ),
+      );
+    } else {
+      final last = updated.last;
+      final hasSameMetrics =
+          last.rawBytes == current.totalRawBytes &&
+          last.persistedBytes == current.totalPersistedBytes;
+
+      if (_isSameDay(last.measuredAt, now)) {
+        if (!hasSameMetrics) {
+          updated[updated.length - 1] = StorageInsightSnapshot(
+            measuredAt: now,
+            rawBytes: current.totalRawBytes,
+            persistedBytes: current.totalPersistedBytes,
+          );
+        }
+      } else {
+        updated.add(
+          StorageInsightSnapshot(
+            measuredAt: now,
+            rawBytes: current.totalRawBytes,
+            persistedBytes: current.totalPersistedBytes,
+          ),
+        );
+      }
+    }
+
+    final trimmed = updated.length > _maxInsightSnapshots
+        ? updated.sublist(updated.length - _maxInsightSnapshots)
+        : updated;
+    await _saveInsightHistory(trimmed);
+
+    return StorageInsightsWithHistory(current: current, history: trimmed);
+  }
+
+  Future<List<StorageInsightSnapshot>> _loadInsightHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString(_insightsHistoryKey);
+    if (json == null || json.isEmpty) return const [];
+
+    try {
+      final list = List<Map<String, dynamic>>.from(jsonDecode(json) as List);
+      return list
+          .map(StorageInsightSnapshot.fromJson)
+          .where((item) => item != null)
+          .cast<StorageInsightSnapshot>()
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _saveInsightHistory(List<StorageInsightSnapshot> history) async {
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = jsonEncode(history.map((e) => e.toJson()).toList());
+    await prefs.setString(_insightsHistoryKey, encoded);
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  String _displayLabelForKey(String key) {
+    switch (key) {
+      case _expensesKey:
+        return 'Expenses';
+      case _categoriesKey:
+        return 'Categories';
+      case _budgetsKey:
+        return 'Budgets';
+      default:
+        return key;
+    }
+  }
+}
+
+class StorageBucketInsight {
+  final String key;
+  final String label;
+  final int rawBytes;
+  final int persistedBytes;
+
+  const StorageBucketInsight({
+    required this.key,
+    required this.label,
+    required this.rawBytes,
+    required this.persistedBytes,
+  });
+
+  int get differenceBytes => rawBytes - persistedBytes;
+
+  double get reductionPercent {
+    if (rawBytes <= 0) return 0;
+    return ((rawBytes - persistedBytes) / rawBytes) * 100;
+  }
+}
+
+class StorageInsights {
+  final List<StorageBucketInsight> buckets;
+
+  const StorageInsights({required this.buckets});
+
+  int get totalRawBytes => buckets.fold(0, (sum, b) => sum + b.rawBytes);
+
+  int get totalPersistedBytes =>
+      buckets.fold(0, (sum, b) => sum + b.persistedBytes);
+
+  int get totalDifferenceBytes => totalRawBytes - totalPersistedBytes;
+
+  double get totalReductionPercent {
+    if (totalRawBytes <= 0) return 0;
+    return ((totalRawBytes - totalPersistedBytes) / totalRawBytes) * 100;
+  }
+}
+
+class StorageInsightSnapshot {
+  final DateTime measuredAt;
+  final int rawBytes;
+  final int persistedBytes;
+
+  const StorageInsightSnapshot({
+    required this.measuredAt,
+    required this.rawBytes,
+    required this.persistedBytes,
+  });
+
+  int get savedBytes => rawBytes - persistedBytes;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'at': measuredAt.toIso8601String(),
+      'raw': rawBytes,
+      'stored': persistedBytes,
+    };
+  }
+
+  static StorageInsightSnapshot? fromJson(Map<String, dynamic> json) {
+    final atRaw = json['at'];
+    final raw = json['raw'];
+    final stored = json['stored'];
+
+    if (atRaw is! String || raw is! int || stored is! int) {
+      return null;
+    }
+
+    final parsed = DateTime.tryParse(atRaw);
+    if (parsed == null) return null;
+
+    return StorageInsightSnapshot(
+      measuredAt: parsed,
+      rawBytes: raw,
+      persistedBytes: stored,
+    );
+  }
+}
+
+class StorageInsightsWithHistory {
+  final StorageInsights current;
+  final List<StorageInsightSnapshot> history;
+
+  const StorageInsightsWithHistory({
+    required this.current,
+    required this.history,
+  });
 }
 
 // Shared prefs implementation (web + fallback)
@@ -107,4 +331,15 @@ Future<List<Map<String, dynamic>>> readFromPrefs(String key) async {
 Future<void> writeToPrefs(String key, List<Map<String, dynamic>> data) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString(key, jsonEncode(data));
+}
+
+Future<int> readStoredBytesForKey(String key) async {
+  if (kIsWeb) {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString(key);
+    if (json == null) return 0;
+    return utf8.encode(json).length;
+  }
+
+  return readFileBytesForKey(key);
 }
