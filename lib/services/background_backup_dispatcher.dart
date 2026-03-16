@@ -31,7 +31,6 @@ Future<void> configureBackgroundBackupWork() async {
   if (io.Platform.isIOS || io.Platform.isAndroid) {
     await Workmanager().initialize(
       callbackDispatcher,
-      isInDebugMode: false,
     );
   }
 
@@ -45,13 +44,13 @@ Future<void> configureBackgroundBackupWork() async {
     frequency: const Duration(hours: 24),
     initialDelay: _initialDelayToNineAm(),
     constraints: Constraints(
-      networkType: NetworkType.not_required,
+      networkType: NetworkType.notRequired,
       requiresBatteryNotLow: false,
       requiresCharging: false,
       requiresDeviceIdle: false,
       requiresStorageNotLow: false,
     ),
-    existingWorkPolicy: ExistingWorkPolicy.replace,
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     backoffPolicy: BackoffPolicy.linear,
     backoffPolicyDelay: const Duration(minutes: 30),
   );
