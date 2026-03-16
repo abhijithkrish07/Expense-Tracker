@@ -2,12 +2,38 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'providers/theme_provider.dart';
 import 'screens/home/home_screen.dart';
+import 'services/daily_backup_service.dart';
 
-class ExpenseTrackerApp extends ConsumerWidget {
+class ExpenseTrackerApp extends ConsumerStatefulWidget {
   const ExpenseTrackerApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ExpenseTrackerApp> createState() => _ExpenseTrackerAppState();
+}
+
+class _ExpenseTrackerAppState extends ConsumerState<ExpenseTrackerApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      DailyBackupService.ensureDueBackupExecuted();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final themeMode =
         ref.watch(themeModeProvider).valueOrNull ?? ThemeMode.dark;
 
