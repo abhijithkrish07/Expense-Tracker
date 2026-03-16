@@ -1,7 +1,7 @@
 name: expense_tracker
 description: "A local-first cross-platform expense tracker."
 publish_to: 'none'
-version: 1.0.1+2
+version: 1.0.1+9
 
 environment:
   sdk: ^3.11.1
