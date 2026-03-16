@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io' as io;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+  show kIsWeb, debugPrint, debugPrintStack;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
@@ -109,7 +111,18 @@ class DailyBackupService {
     final lastBackupDate = prefs.getString(_lastAutoBackupDateKey);
     if (lastBackupDate == todayKey) return;
 
-    final changedItems = await _createOrUpdateDeltaBackup();
+    int changedItems;
+    try {
+      changedItems = await _createOrUpdateDeltaBackup();
+    } on io.FileSystemException catch (error) {
+      debugPrint('Daily backup skipped due to file system access: $error');
+      return;
+    } catch (error, stackTrace) {
+      debugPrint('Daily backup failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      return;
+    }
+
     await prefs.setString(_lastAutoBackupDateKey, todayKey);
 
     final title = source == BackupRunSource.backgroundWorker
@@ -236,7 +249,13 @@ class DailyBackupService {
 
   static Future<String> _resolveDownloadsPath() async {
     if (io.Platform.isAndroid) {
-      return '/storage/emulated/0/Download';
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir == null) {
+        throw io.FileSystemException(
+          'Could not determine app-scoped external storage directory on Android',
+        );
+      }
+      return externalDir.path;
     }
     final homeDir = io.Platform.environment['HOME'] ?? '';
     if (homeDir.isEmpty) {

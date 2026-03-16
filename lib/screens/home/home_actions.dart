@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../models/category.dart';
@@ -21,6 +22,24 @@ class HomeActions {
   const HomeActions();
 
   static const _uuid = Uuid();
+
+  static Future<String> _resolveDownloadsPath() async {
+    if (io.Platform.isAndroid) {
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir == null) {
+        throw io.FileSystemException(
+          'Could not determine app-scoped external storage directory on Android',
+        );
+      }
+      return externalDir.path;
+    }
+
+    final homeDir = io.Platform.environment['HOME'] ?? '';
+    if (homeDir.isEmpty) {
+      throw 'Could not determine home directory';
+    }
+    return '$homeDir/Downloads';
+  }
 
   Future<void> openAddExpense(BuildContext context) async {
     await Navigator.push(
@@ -456,16 +475,7 @@ class HomeActions {
     }
 
     try {
-      final String downloadsPath;
-      if (io.Platform.isAndroid) {
-        downloadsPath = '/storage/emulated/0/Download';
-      } else {
-        final homeDir = io.Platform.environment['HOME'] ?? '';
-        if (homeDir.isEmpty) {
-          throw 'Could not determine home directory';
-        }
-        downloadsPath = '$homeDir/Downloads';
-      }
+      final downloadsPath = await _resolveDownloadsPath();
 
       final downloadsDir = io.Directory(downloadsPath);
       await downloadsDir.create(recursive: true);
