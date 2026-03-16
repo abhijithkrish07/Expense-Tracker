@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
@@ -10,9 +11,11 @@ import 'package:open_file/open_file.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/expense.dart';
 import '../../models/category.dart';
+import '../../models/budget.dart';
 import '../../providers/expense_provider.dart';
 import '../../providers/category_provider.dart';
 import '../../providers/budget_provider.dart';
+import '../../providers/storage_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../utils/currency_formatter.dart';
 import '../../utils/date_helpers.dart';
@@ -44,10 +47,416 @@ class _PendingImportExpense {
   });
 }
 
+class _AppBackupPayload {
+  final DateTime createdAt;
+  final int schemaVersion;
+  final String type;
+  final List<Map<String, dynamic>> expenses;
+  final List<Map<String, dynamic>> categories;
+  final List<Map<String, dynamic>> budgets;
+
+  const _AppBackupPayload({
+    required this.createdAt,
+    required this.schemaVersion,
+    this.type = 'full',
+    required this.expenses,
+    required this.categories,
+    required this.budgets,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'app': 'expense_tracker',
+      'schemaVersion': schemaVersion,
+      'type': type,
+      'createdAt': createdAt.toIso8601String(),
+      'expenses': expenses,
+      'categories': categories,
+      'budgets': budgets,
+    };
+  }
+
+  static _AppBackupPayload? tryParse(Map<String, dynamic> json) {
+    final rawVersion = json['schemaVersion'];
+    final rawType = json['type'];
+    final rawCreatedAt = json['createdAt'];
+    final rawExpenses = json['expenses'];
+    final rawCategories = json['categories'];
+    final rawBudgets = json['budgets'];
+
+    if (rawVersion is! int || rawCreatedAt is! String) {
+      return null;
+    }
+
+    if (rawType != null && rawType != 'full') return null;
+
+    if (rawExpenses is! List || rawCategories is! List || rawBudgets is! List) {
+      return null;
+    }
+
+    final createdAt = DateTime.tryParse(rawCreatedAt);
+    if (createdAt == null) return null;
+
+    List<Map<String, dynamic>> asMapList(List<dynamic> input) {
+      return input
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+
+    return _AppBackupPayload(
+      createdAt: createdAt,
+      schemaVersion: rawVersion,
+      type: 'full',
+      expenses: asMapList(rawExpenses),
+      categories: asMapList(rawCategories),
+      budgets: asMapList(rawBudgets),
+    );
+  }
+}
+
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   static const _uuid = Uuid();
+  static const _backupSchemaVersion = 1;
+  static const _backupDirectoryName = 'ExpenseTracker_Backups';
+  static const _latestFullBackupFileName = 'ExpenseTracker_Backup_Latest.json';
+  static const _maxDeltaBackupFiles = 24;
+
+  static String _humanCount(int value, String noun) {
+    return '$value $noun${value == 1 ? '' : 's'}';
+  }
+
+  static _AppBackupPayload _buildBackupPayload(WidgetRef ref) {
+    final expenses = ref.read(expenseProvider).valueOrNull ?? <Expense>[];
+    final categories = ref.read(categoryProvider).valueOrNull ?? <Category>[];
+    final budgets = ref.read(budgetProvider).valueOrNull ?? <Budget>[];
+
+    return _AppBackupPayload(
+      createdAt: DateTime.now(),
+      schemaVersion: _backupSchemaVersion,
+      expenses: expenses.map((e) => e.toJson()).toList(),
+      categories: categories.map((c) => c.toJson()).toList(),
+      budgets: budgets.map((b) => b.toJson()).toList(),
+    );
+  }
+
+  static String _sanitizeFileLabel(String input) {
+    return input.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+  }
+
+  static Future<String> _resolveDownloadsPath() async {
+    if (io.Platform.isAndroid) {
+      return '/storage/emulated/0/Download';
+    }
+    final homeDir = io.Platform.environment['HOME'] ?? '';
+    if (homeDir.isEmpty) {
+      throw 'Could not determine home directory';
+    }
+    return '$homeDir/Downloads';
+  }
+
+  static Future<io.Directory> _resolveBackupDirectory() async {
+    final downloadsPath = await _resolveDownloadsPath();
+    final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
+    await backupDir.create(recursive: true);
+    return backupDir;
+  }
+
+  static Future<_AppBackupPayload?> _loadLatestFullBackup(
+    io.Directory backupDir,
+  ) async {
+    final latestFile = io.File('${backupDir.path}/$_latestFullBackupFileName');
+    if (!await latestFile.exists()) return null;
+
+    try {
+      final content = await latestFile.readAsString();
+      final decoded = jsonDecode(content);
+      if (decoded is! Map<String, dynamic>) return null;
+      return _AppBackupPayload.tryParse(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Map<String, Map<String, dynamic>> _indexById(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final indexed = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      final id = row['id'];
+      if (id is String && id.isNotEmpty) {
+        indexed[id] = row;
+      }
+    }
+    return indexed;
+  }
+
+  static ({List<Map<String, dynamic>> upsert, List<String> delete})
+      _computeCollectionDelta(
+    List<Map<String, dynamic>> previous,
+    List<Map<String, dynamic>> current,
+  ) {
+    final prevById = _indexById(previous);
+    final currentById = _indexById(current);
+
+    final upsert = <Map<String, dynamic>>[];
+    final deleted = <String>[];
+
+    for (final entry in currentById.entries) {
+      final previousRow = prevById[entry.key];
+      if (previousRow == null || jsonEncode(previousRow) != jsonEncode(entry.value)) {
+        upsert.add(entry.value);
+      }
+    }
+
+    for (final id in prevById.keys) {
+      if (!currentById.containsKey(id)) {
+        deleted.add(id);
+      }
+    }
+
+    return (upsert: upsert, delete: deleted);
+  }
+
+  static Future<void> _pruneOldDeltaBackups(io.Directory backupDir) async {
+    final all = await backupDir.list().toList();
+    final deltaFiles = all
+        .whereType<io.File>()
+        .where((file) => file.path.endsWith('.json'))
+        .where((file) => file.uri.pathSegments.last.contains('_Delta_'))
+        .toList();
+
+    if (deltaFiles.length <= _maxDeltaBackupFiles) return;
+
+    deltaFiles.sort((a, b) => b.path.compareTo(a.path));
+    final toDelete = deltaFiles.skip(_maxDeltaBackupFiles);
+    for (final file in toDelete) {
+      try {
+        await file.delete();
+      } catch (_) {
+        // Keep going; retention is best effort.
+      }
+    }
+  }
+
+  static Future<io.File> _writeBackupFile({
+    required _AppBackupPayload payload,
+    required String filePrefix,
+  }) async {
+    final backupDir = await _resolveBackupDirectory();
+
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final safePrefix = _sanitizeFileLabel(filePrefix);
+    final fileName = '${safePrefix}_$timestamp.json';
+    final filePath = '${backupDir.path}/$fileName';
+    final file = io.File(filePath);
+
+    final encoded = const JsonEncoder.withIndent('  ').convert(payload.toJson());
+    await file.writeAsString(encoded);
+
+    return file;
+  }
+
+  static Future<void> _createRecoveryBackup(
+    BuildContext context,
+    WidgetRef ref, {
+    bool showFeedback = true,
+    String filePrefix = 'ExpenseTracker_Backup',
+  }) async {
+    final payload = _buildBackupPayload(ref);
+    final backupDir = await _resolveBackupDirectory();
+    final previous = await _loadLatestFullBackup(backupDir);
+
+    io.File? deltaFile;
+    var changedItems = 0;
+    if (previous != null) {
+      final expenseDelta = _computeCollectionDelta(previous.expenses, payload.expenses);
+      final categoryDelta = _computeCollectionDelta(previous.categories, payload.categories);
+      final budgetDelta = _computeCollectionDelta(previous.budgets, payload.budgets);
+
+      changedItems =
+          expenseDelta.upsert.length +
+          expenseDelta.delete.length +
+          categoryDelta.upsert.length +
+          categoryDelta.delete.length +
+          budgetDelta.upsert.length +
+          budgetDelta.delete.length;
+
+      if (changedItems > 0) {
+        final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+        final safePrefix = _sanitizeFileLabel(filePrefix);
+        deltaFile = io.File(
+          '${backupDir.path}/${safePrefix}_Delta_$timestamp.json',
+        );
+        final deltaPayload = {
+          'app': 'expense_tracker',
+          'schemaVersion': _backupSchemaVersion,
+          'type': 'delta',
+          'createdAt': DateTime.now().toIso8601String(),
+          'baseCreatedAt': previous.createdAt.toIso8601String(),
+          'changes': {
+            'expenses': {
+              'upsert': expenseDelta.upsert,
+              'delete': expenseDelta.delete,
+            },
+            'categories': {
+              'upsert': categoryDelta.upsert,
+              'delete': categoryDelta.delete,
+            },
+            'budgets': {
+              'upsert': budgetDelta.upsert,
+              'delete': budgetDelta.delete,
+            },
+          },
+        };
+        final encodedDelta = const JsonEncoder.withIndent('  ').convert(deltaPayload);
+        await deltaFile.writeAsString(encodedDelta);
+      }
+    }
+
+    final latestFullFile = io.File(
+      '${backupDir.path}/$_latestFullBackupFileName',
+    );
+    final encodedFull = const JsonEncoder.withIndent('  ').convert(payload.toJson());
+    await latestFullFile.writeAsString(encodedFull);
+    await _pruneOldDeltaBackups(backupDir);
+
+    io.File? fullArchiveFile;
+    if (previous == null) {
+      fullArchiveFile = await _writeBackupFile(
+        payload: payload,
+        filePrefix: '${filePrefix}_Full',
+      );
+    }
+
+    if (!showFeedback || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          previous == null
+              ? 'Full backup created: ${fullArchiveFile?.uri.pathSegments.last ?? _latestFullBackupFileName}.'
+              : changedItems == 0
+                  ? 'No data changes since last backup. Latest full snapshot refreshed.'
+                  : 'Delta backup saved: ${deltaFile?.uri.pathSegments.last ?? 'delta file'}. '
+                      'Updated $changedItems item${changedItems == 1 ? '' : 's'}.',
+        ),
+      ),
+    );
+  }
+
+  static Future<void> _restoreFromBackup(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    if (!context.mounted) return;
+
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+      withData: true,
+    );
+    if (picked == null) return;
+
+    final bytes = picked.files.single.bytes;
+    if (bytes == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not read selected backup file.')),
+      );
+      return;
+    }
+
+    _AppBackupPayload? payload;
+    List<Expense> expenses;
+    List<Category> categories;
+    List<Budget> budgets;
+
+    try {
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Invalid backup structure');
+      }
+
+      if (decoded['type'] == 'delta') {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Delta backup selected. Choose ExpenseTracker_Backup_Latest.json to restore.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      payload = _AppBackupPayload.tryParse(decoded);
+      if (payload == null) {
+        throw const FormatException('Invalid backup payload');
+      }
+
+      expenses = payload.expenses.map(Expense.fromJson).toList();
+      categories = payload.categories.map(Category.fromJson).toList();
+      budgets = payload.budgets.map(Budget.fromJson).toList();
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid backup file.')),
+      );
+      return;
+    }
+
+    final currentExpenses = ref.read(expenseProvider).valueOrNull ?? <Expense>[];
+    final currentCategories = ref.read(categoryProvider).valueOrNull ?? <Category>[];
+    final currentBudgets = ref.read(budgetProvider).valueOrNull ?? <Budget>[];
+
+    if (!context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore Backup'),
+        content: Text(
+          'This will replace your current local data.\n\n'
+          'Current: ${_humanCount(currentExpenses.length, 'expense')}, '
+          '${_humanCount(currentCategories.length, 'category')}, '
+          '${_humanCount(currentBudgets.length, 'budget')}\n'
+          'Backup: ${_humanCount(expenses.length, 'expense')}, '
+          '${_humanCount(categories.length, 'category')}, '
+          '${_humanCount(budgets.length, 'budget')}\n\n'
+          'Backup date: ${DateFormat('dd MMM yyyy, HH:mm').format(payload!.createdAt)}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final storage = ref.read(storageServiceProvider);
+    await storage.saveCategories(categories);
+    await storage.saveBudgets(budgets);
+    await storage.saveExpenses(expenses);
+
+    ref.invalidate(categoryProvider);
+    ref.invalidate(budgetProvider);
+    ref.invalidate(expenseProvider);
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Backup restored successfully.')),
+    );
+  }
 
   Future<bool> _showImportFormatGuide(BuildContext context) async {
     final proceed = await showDialog<bool>(
@@ -62,6 +471,7 @@ class HomeScreen extends ConsumerWidget {
           'Food | 250\n'
           'Transport | 80\n'
           'Shopping | 1200\n'
+          'Food | 200+15+30 (imports as 3 separate expenses)\n'
           'Total Expenses | 1530\n\n'
           'Import will stop before the row where Category is "Total Expenses".',
         ),
@@ -161,20 +571,27 @@ class HomeScreen extends ConsumerWidget {
           break;
         }
 
-        final amount = _cellAsAmount(row[1]);
-        if (amount == null || amount <= 0) {
+        final amounts = _cellAsAmounts(row[1]);
+        if (amounts == null || amounts.isEmpty) {
           skipped++;
           continue;
         }
 
-        pendingImports.add(
-          _PendingImportExpense(
-            categoryName: categoryName,
-            amount: amount,
-            expenseDate: monthDate,
-            sheetName: sheetName,
-          ),
-        );
+        for (final amount in amounts) {
+          if (amount <= 0) {
+            skipped++;
+            continue;
+          }
+
+          pendingImports.add(
+            _PendingImportExpense(
+              categoryName: categoryName,
+              amount: amount,
+              expenseDate: monthDate,
+              sheetName: sheetName,
+            ),
+          );
+        }
       }
 
       if (stopReachedInThisSheet) {
@@ -268,10 +685,10 @@ class HomeScreen extends ConsumerWidget {
     return text.isEmpty ? null : text;
   }
 
-  double? _cellAsAmount(dynamic cell) {
+  List<double>? _cellAsAmounts(dynamic cell) {
     final value = _rawCellValue(cell);
     if (value == null) return null;
-    if (value is num) return value.toDouble();
+    if (value is num) return [value.toDouble()];
 
     var raw = value.toString().trim();
     if (raw.isEmpty) return null;
@@ -281,10 +698,36 @@ class HomeScreen extends ConsumerWidget {
       raw = raw.substring(1);
     }
 
+    // For inputs like "200+15+30", create separate imported expense entries.
+    if (raw.contains('+')) {
+      final parts = raw
+          .split('+')
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .toList();
+
+      if (parts.isEmpty) return null;
+
+      final parsed = <double>[];
+      for (final part in parts) {
+        final amount = _parseSingleAmount(part);
+        if (amount == null) return null;
+        parsed.add(amount);
+      }
+
+      return parsed;
+    }
+
+    final singleAmount = _parseSingleAmount(raw);
+    if (singleAmount == null) return null;
+    return [singleAmount];
+  }
+
+  double? _parseSingleAmount(String raw) {
+    if (raw.isEmpty) return null;
+
     final hasArithmeticOperator = RegExp(r'[+\-*/]').hasMatch(raw);
     if (hasArithmeticOperator) {
-      // Strict expression path: never fall back to digit-stripping for values like
-      // "20+13", otherwise operators are removed and become "2013".
       final evaluated = _evaluateSimpleExpression(raw);
       if (evaluated != null) return evaluated;
       return null;
@@ -484,6 +927,25 @@ class HomeScreen extends ConsumerWidget {
 
     if (confirmed != true) return;
 
+    try {
+      await HomeScreen._createRecoveryBackup(
+        context,
+        ref,
+        showFeedback: false,
+        filePrefix: 'ExpenseTracker_AutoBackup_BeforeMonthlyDelete',
+      );
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not create auto-backup before delete. Continuing anyway.',
+            ),
+          ),
+        );
+      }
+    }
+
     final deleted = await ref
         .read(expenseProvider.notifier)
         .deleteExpensesForMonth(selectedMonth.year, selectedMonth.month);
@@ -565,6 +1027,25 @@ class HomeScreen extends ConsumerWidget {
     );
 
     if (confirmed != true) return;
+
+    try {
+      await HomeScreen._createRecoveryBackup(
+        context,
+        ref,
+        showFeedback: false,
+        filePrefix: 'ExpenseTracker_AutoBackup_BeforeDeleteAll',
+      );
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not create auto-backup before delete. Continuing anyway.',
+            ),
+          ),
+        );
+      }
+    }
 
     final deleted = await ref
         .read(expenseProvider.notifier)
@@ -943,24 +1424,28 @@ class _ExpandableHomeFabState extends State<_ExpandableHomeFab> {
                     _FabActionRow(
                       label: 'Add Expense',
                       icon: Icons.add,
+                      heroTag: 'home-fab-add-expense',
                       onPressed: () => _runAction(widget.onAddExpense),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
                       label: 'Import from Excel',
                       icon: Icons.file_upload_outlined,
+                      heroTag: 'home-fab-import-expenses',
                       onPressed: () => _runAction(widget.onImportExpenses),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
                       label: 'Export to Excel',
                       icon: Icons.file_download_outlined,
+                      heroTag: 'home-fab-export-expenses',
                       onPressed: () => _runAction(widget.onExportExpenses),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
                       label: 'Delete Monthly Expense',
                       icon: Icons.delete_sweep_outlined,
+                      heroTag: 'home-fab-delete-monthly',
                       backgroundColor: widget.canDeleteMonthlyExpenses
                           ? theme.colorScheme.errorContainer
                           : theme.disabledColor.withAlpha(40),
@@ -975,6 +1460,7 @@ class _ExpandableHomeFabState extends State<_ExpandableHomeFab> {
                     _FabActionRow(
                       label: 'Delete All Years Expenses',
                       icon: Icons.delete_forever_outlined,
+                      heroTag: 'home-fab-delete-all-years',
                       backgroundColor: widget.canDeleteAllYearsExpenses
                           ? theme.colorScheme.error
                           : theme.disabledColor.withAlpha(40),
@@ -991,6 +1477,7 @@ class _ExpandableHomeFabState extends State<_ExpandableHomeFab> {
               : const SizedBox.shrink(),
         ),
         FloatingActionButton(
+          heroTag: 'home-fab-menu-toggle',
           onPressed: _toggle,
           child: AnimatedRotation(
             duration: const Duration(milliseconds: 180),
@@ -1006,6 +1493,7 @@ class _ExpandableHomeFabState extends State<_ExpandableHomeFab> {
 class _FabActionRow extends StatelessWidget {
   final String label;
   final IconData icon;
+  final Object heroTag;
   final VoidCallback? onPressed;
   final Color? backgroundColor;
   final Color? foregroundColor;
@@ -1013,6 +1501,7 @@ class _FabActionRow extends StatelessWidget {
   const _FabActionRow({
     required this.label,
     required this.icon,
+    required this.heroTag,
     required this.onPressed,
     this.backgroundColor,
     this.foregroundColor,
@@ -1054,6 +1543,7 @@ class _FabActionRow extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         FloatingActionButton.small(
+          heroTag: heroTag,
           onPressed: onPressed,
           backgroundColor: backgroundColor,
           foregroundColor: foregroundColor,
@@ -1448,6 +1938,29 @@ class _AppDrawer extends ConsumerWidget {
                 context,
                 MaterialPageRoute(builder: (_) => const StorageInsightsScreen()),
               );
+            },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('Create Data Backup'),
+            subtitle: const Text('Create compact delta + refresh latest full backup'),
+            onTap: () async {
+              Navigator.pop(context);
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+              if (!context.mounted) return;
+              await HomeScreen._createRecoveryBackup(context, ref);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.restore_page_outlined),
+            title: const Text('Restore Data Backup'),
+            subtitle: const Text('Select ExpenseTracker_Backup_Latest.json to restore'),
+            onTap: () async {
+              Navigator.pop(context);
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+              if (!context.mounted) return;
+              await HomeScreen._restoreFromBackup(context, ref);
             },
           ),
         ],

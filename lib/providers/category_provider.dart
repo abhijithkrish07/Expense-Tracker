@@ -59,6 +59,26 @@ class CategoryNotifier extends AsyncNotifier<List<Category>> {
     await ref.read(storageServiceProvider).saveCategories(updated);
   }
 
+  Future<void> reorderCategories(int oldIndex, int newIndex) async {
+    final current = List<Category>.from(
+      state.valueOrNull ?? const <Category>[],
+    );
+    if (oldIndex < 0 || oldIndex >= current.length) return;
+    if (newIndex < 0 || newIndex > current.length) return;
+
+    if (oldIndex < newIndex) {
+      newIndex -= 1;
+    }
+
+    if (oldIndex == newIndex) return;
+
+    final moved = current.removeAt(oldIndex);
+    current.insert(newIndex, moved);
+
+    state = AsyncData(current);
+    await ref.read(storageServiceProvider).saveCategories(current);
+  }
+
   Category? findById(String id) {
     return (state.valueOrNull ?? [])
         .cast<Category?>()

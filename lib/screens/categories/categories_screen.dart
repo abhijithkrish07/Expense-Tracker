@@ -7,11 +7,16 @@ import '../../providers/expense_provider.dart';
 import '../../utils/category_icons.dart';
 import '../../widgets/empty_state_widget.dart';
 
-class CategoriesScreen extends ConsumerWidget {
+class CategoriesScreen extends ConsumerStatefulWidget {
   const CategoriesScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CategoriesScreen> createState() => _CategoriesScreenState();
+}
+
+class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
+  @override
+  Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(categoryProvider);
     final expenses = ref.watch(expenseProvider).valueOrNull ?? [];
 
@@ -28,41 +33,85 @@ class CategoriesScreen extends ConsumerWidget {
               subtitle: 'Tap + to add a category',
             );
           }
-          return ListView.builder(
-            itemCount: categories.length,
-            itemBuilder: (context, index) {
-              final cat = categories[index];
-              final count = expenses
-                  .where((e) => e.categoryId == cat.id)
-                  .length;
-              final color = Color(
-                int.parse(cat.colorHex.replaceAll('#', ''), radix: 16) +
-                    0xFF000000,
-              );
-              return ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: color.withAlpha(30),
-                  child: Icon(
-                    iconFromName(cat.iconName),
-                    color: color,
-                    size: 20,
-                  ),
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.drag_indicator,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Drag the handle to reorder categories',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
                 ),
-                title: Text(cat.name),
-                subtitle: Text('$count expense${count == 1 ? '' : 's'}'),
-                trailing: IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  onPressed: () =>
-                      _showCategorySheet(context, ref, category: cat),
+              ),
+              Expanded(
+                child: ReorderableListView.builder(
+                  buildDefaultDragHandles: false,
+                  itemCount: categories.length,
+                  onReorder: (oldIndex, newIndex) {
+                    ref
+                        .read(categoryProvider.notifier)
+                        .reorderCategories(oldIndex, newIndex);
+                  },
+                  itemBuilder: (context, index) {
+                    final cat = categories[index];
+                    final count = expenses
+                        .where((e) => e.categoryId == cat.id)
+                        .length;
+                    final color = Color(
+                      int.parse(cat.colorHex.replaceAll('#', ''), radix: 16) +
+                          0xFF000000,
+                    );
+                    return ListTile(
+                      key: ValueKey(cat.id),
+                      leading: CircleAvatar(
+                        backgroundColor: color.withAlpha(30),
+                        child: Icon(
+                          iconFromName(cat.iconName),
+                          color: color,
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(cat.name),
+                      subtitle: Text('$count expense${count == 1 ? '' : 's'}'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () =>
+                                _showCategorySheet(context, category: cat),
+                          ),
+                          ReorderableDragStartListener(
+                            index: index,
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(Icons.drag_handle),
+                            ),
+                          ),
+                        ],
+                      ),
+                      onTap: () => _showCategorySheet(context, category: cat),
+                    );
+                  },
                 ),
-                onTap: () => _showCategorySheet(context, ref, category: cat),
-              );
-            },
+              ),
+            ],
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showCategorySheet(context, ref),
+        onPressed: () => _showCategorySheet(context),
         child: const Icon(Icons.add),
       ),
     );
@@ -70,9 +119,10 @@ class CategoriesScreen extends ConsumerWidget {
 
   void _showCategorySheet(
     BuildContext context,
-    WidgetRef ref, {
+    {
     Category? category,
-  }) {
+  }
+  ) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,

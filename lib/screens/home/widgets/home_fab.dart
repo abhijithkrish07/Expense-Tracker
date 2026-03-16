@@ -58,24 +58,28 @@ class _ExpandableHomeFabState extends State<ExpandableHomeFab> {
                     _FabActionRow(
                       label: 'Add Expense',
                       icon: Icons.add,
+                      heroTag: 'home-fab-add-expense',
                       onPressed: () => _runAction(widget.onAddExpense),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
                       label: 'Import from Excel',
                       icon: Icons.file_upload_outlined,
+                      heroTag: 'home-fab-import-expenses',
                       onPressed: () => _runAction(widget.onImportExpenses),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
                       label: 'Export to Excel',
                       icon: Icons.file_download_outlined,
+                      heroTag: 'home-fab-export-expenses',
                       onPressed: () => _runAction(widget.onExportExpenses),
                     ),
                     const SizedBox(height: 10),
                     _FabActionRow(
                       label: 'Delete Monthly Expense',
                       icon: Icons.delete_sweep_outlined,
+                      heroTag: 'home-fab-delete-monthly',
                       backgroundColor: widget.canDeleteMonthlyExpenses
                           ? theme.colorScheme.errorContainer
                           : theme.disabledColor.withAlpha(40),
@@ -90,6 +94,7 @@ class _ExpandableHomeFabState extends State<ExpandableHomeFab> {
                     _FabActionRow(
                       label: 'Delete All Years Expenses',
                       icon: Icons.delete_forever_outlined,
+                      heroTag: 'home-fab-delete-all-years',
                       backgroundColor: widget.canDeleteAllYearsExpenses
                           ? theme.colorScheme.error
                           : theme.disabledColor.withAlpha(40),
@@ -106,6 +111,7 @@ class _ExpandableHomeFabState extends State<ExpandableHomeFab> {
               : const SizedBox.shrink(),
         ),
         FloatingActionButton(
+          heroTag: 'home-fab-menu-toggle',
           onPressed: _toggle,
           child: AnimatedRotation(
             duration: const Duration(milliseconds: 180),
@@ -121,6 +127,7 @@ class _ExpandableHomeFabState extends State<ExpandableHomeFab> {
 class _FabActionRow extends StatelessWidget {
   final String label;
   final IconData icon;
+  final Object heroTag;
   final VoidCallback? onPressed;
   final Color? backgroundColor;
   final Color? foregroundColor;
@@ -128,6 +135,7 @@ class _FabActionRow extends StatelessWidget {
   const _FabActionRow({
     required this.label,
     required this.icon,
+    required this.heroTag,
     required this.onPressed,
     this.backgroundColor,
     this.foregroundColor,
@@ -169,6 +177,7 @@ class _FabActionRow extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         FloatingActionButton.small(
+          heroTag: heroTag,
           onPressed: onPressed,
           backgroundColor: backgroundColor,
           foregroundColor: foregroundColor,
