@@ -7,6 +7,7 @@ import '../../providers/budget_provider.dart';
 import '../../providers/category_provider.dart';
 import '../../utils/currency_formatter.dart';
 import '../../widgets/empty_state_widget.dart';
+import 'category_expenses_screen.dart';
 
 class AnalyticsScreen extends ConsumerWidget {
   const AnalyticsScreen({super.key});
@@ -95,6 +96,7 @@ class AnalyticsScreen extends ConsumerWidget {
               : _CategoryPieChart(
                   summary: summary,
                   categories: categories,
+                  selectedMonth: selectedMonth,
                 ),
           const SizedBox(height: 32),
 
@@ -145,9 +147,10 @@ class _SummaryChip extends StatelessWidget {
 class _CategoryPieChart extends StatefulWidget {
   final AnalyticsSummary summary;
   final List<dynamic> categories;
+  final DateTime selectedMonth;
 
   const _CategoryPieChart(
-      {required this.summary, required this.categories});
+      {required this.summary, required this.categories, required this.selectedMonth});
 
   @override
   State<_CategoryPieChart> createState() => _CategoryPieChartState();
@@ -155,6 +158,20 @@ class _CategoryPieChart extends StatefulWidget {
 
 class _CategoryPieChartState extends State<_CategoryPieChart> {
   int _touchedIndex = -1;
+
+  void _navigateToCategory(BuildContext context, String categoryId, String categoryName) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CategoryExpensesScreen(
+          categoryId: categoryId,
+          categoryName: categoryName,
+          year: widget.selectedMonth.year,
+          month: widget.selectedMonth.month,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -180,6 +197,19 @@ class _CategoryPieChartState extends State<_CategoryPieChart> {
                           response.touchedSection!.touchedSectionIndex;
                     }
                   });
+                  if (event.isInterestedForInteractions &&
+                      event is FlTapUpEvent &&
+                      response?.touchedSection != null) {
+                    final i = response!.touchedSection!.touchedSectionIndex;
+                    if (i >= 0 && i < totals.length) {
+                      final ct = totals[i];
+                      final cat = widget.categories.cast<dynamic>().firstWhere(
+                          (c) => c.id == ct.categoryId,
+                          orElse: () => null);
+                      _navigateToCategory(
+                          context, ct.categoryId, cat?.name ?? 'Unknown');
+                    }
+                  }
                 },
               ),
               sections: totals.asMap().entries.map((entry) {
@@ -225,28 +255,36 @@ class _CategoryPieChartState extends State<_CategoryPieChart> {
                   0xFF000000)
               : theme.colorScheme.primary;
           final pct = total > 0 ? ct.total / total * 100 : 0.0;
+          final catName = cat?.name ?? 'Unknown';
 
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              children: [
-                Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                        color: color, shape: BoxShape.circle)),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: Text(cat?.name ?? 'Unknown',
-                        style: theme.textTheme.bodyMedium)),
-                Text('${pct.toStringAsFixed(1)}%',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline)),
-                const SizedBox(width: 12),
-                Text(formatCurrency(ct.total),
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w600)),
-              ],
+          return InkWell(
+            onTap: () => _navigateToCategory(context, ct.categoryId, catName),
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                          color: color, shape: BoxShape.circle)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(catName,
+                          style: theme.textTheme.bodyMedium)),
+                  Text('${pct.toStringAsFixed(1)}%',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline)),
+                  const SizedBox(width: 12),
+                  Text(formatCurrency(ct.total),
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 4),
+                  Icon(Icons.chevron_right,
+                      size: 16, color: theme.colorScheme.outline),
+                ],
+              ),
             ),
           );
         }),
