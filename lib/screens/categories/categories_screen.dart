@@ -69,8 +69,8 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
                         .where((e) => e.categoryId == cat.id)
                         .length;
                     final color = Color(
-                      int.parse(cat.colorHex.replaceAll('#', ''), radix: 16) +
-                          0xFF000000,
+                      0xFF000000 |
+                          int.parse(cat.colorHex.replaceAll('#', ''), radix: 16),
                     );
                     return ListTile(
                       key: ValueKey(cat.id),
@@ -154,7 +154,7 @@ class _CategorySheetState extends State<_CategorySheet> {
       final cat = widget.category!;
       _nameController.text = cat.name;
       _selectedColor = Color(
-        int.parse(cat.colorHex.replaceAll('#', ''), radix: 16) + 0xFF000000,
+        0xFF000000 | int.parse(cat.colorHex.replaceAll('#', ''), radix: 16),
       );
       _selectedIcon = cat.iconName;
     }

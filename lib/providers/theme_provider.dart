@@ -30,6 +30,8 @@ class ThemeModeNotifier extends AsyncNotifier<ThemeMode> {
         return ThemeMode.dark;
       case 'light':
         return ThemeMode.light;
+      case 'system':
+        return ThemeMode.system;
       default:
         return ThemeMode.dark;
     }
@@ -40,8 +42,9 @@ class ThemeModeNotifier extends AsyncNotifier<ThemeMode> {
       case ThemeMode.dark:
         return 'dark';
       case ThemeMode.light:
-      case ThemeMode.system:
         return 'light';
+      case ThemeMode.system:
+        return 'system';
     }
   }
 }

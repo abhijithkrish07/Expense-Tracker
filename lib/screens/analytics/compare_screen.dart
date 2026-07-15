@@ -365,7 +365,7 @@ class _CategoryCompareList extends StatelessWidget {
             (c) => c.id == categoryId, orElse: () => null);
         final catName = cat?.name ?? 'Unknown';
         final catColor = cat != null
-            ? Color(int.parse(cat.colorHex.replaceAll('#', ''), radix: 16) + 0xFF000000)
+            ? Color(0xFF000000 | int.parse(cat.colorHex.replaceAll('#', ''), radix: 16))
             : Theme.of(context).colorScheme.primary;
         final aVal = mapA[categoryId] ?? 0.0;
         final bVal = mapB[categoryId] ?? 0.0;

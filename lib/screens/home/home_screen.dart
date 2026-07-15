@@ -3,7 +3,7 @@ import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +17,7 @@ import '../../models/budget.dart';
 import '../../providers/expense_provider.dart';
 import '../../providers/category_provider.dart';
 import '../../providers/budget_provider.dart';
+import '../../providers/home_provider.dart';
 import '../../providers/storage_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../utils/currency_formatter.dart';
@@ -28,12 +29,6 @@ import '../analytics/analytics_screen.dart';
 import '../categories/categories_screen.dart';
 import '../budget/budget_settings_screen.dart';
 import 'storage_insights_screen.dart';
-
-// Selected month for home screen
-final homeMonthProvider = StateProvider<DateTime>((ref) {
-  final now = DateTime.now();
-  return DateTime(now.year, now.month);
-});
 
 class _PendingImportExpense {
   final String categoryName;
@@ -858,7 +853,7 @@ class HomeScreen extends ConsumerWidget {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
 
-    final monthMap = <String, int>{
+    const monthMap = <String, int>{
       'JAN': 1,
       'JANUARY': 1,
       'FEB': 2,
@@ -1276,9 +1271,10 @@ class HomeScreen extends ConsumerWidget {
                 );
               }
             } catch (e) {
+              debugPrint('Could not open exported file: $e');
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Could not open file: $e')),
+                  const SnackBar(content: Text('Could not open the file.')),
                 );
               }
             }
@@ -1286,10 +1282,11 @@ class HomeScreen extends ConsumerWidget {
         }
       }
     } catch (e) {
+      debugPrint('Export failed: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+        ).showSnackBar(const SnackBar(content: Text('Export failed. Please try again.')));
       }
     }
   }
@@ -1746,12 +1743,13 @@ class _ExpenseList extends ConsumerWidget {
       final key = formatDayHeader(e.date);
       grouped.putIfAbsent(key, () => []).add(e);
     }
+    final dateKeys = grouped.keys.toList();
 
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 80),
       itemCount: grouped.length,
       itemBuilder: (context, index) {
-        final dateKey = grouped.keys.elementAt(index);
+        final dateKey = dateKeys[index];
         final dayExpenses = grouped[dateKey]!;
         final dayTotal = dayExpenses.fold(0.0, (sum, e) => sum + e.amount);
 
@@ -1896,7 +1894,7 @@ class _ExpenseTile extends StatelessWidget {
       radix: 16,
     );
     if (parsed == null) return theme.colorScheme.primary;
-    return Color(parsed + 0xFF000000);
+    return Color(0xFF000000 | parsed);
   }
 }
 

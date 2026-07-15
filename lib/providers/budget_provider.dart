@@ -50,14 +50,13 @@ class BudgetNotifier extends AsyncNotifier<List<Budget>> {
   }
 
   Budget? budgetFor(int year, int month, {String? categoryId}) {
-    return (state.valueOrNull ?? [])
-        .cast<Budget?>()
-        .firstWhere(
-            (b) =>
-                b?.year == year &&
-                b?.month == month &&
-                b?.categoryId == categoryId,
-            orElse: () => null);
+    final budgets = state.valueOrNull ?? [];
+    try {
+      return budgets.firstWhere((b) =>
+          b.year == year && b.month == month && b.categoryId == categoryId);
+    } catch (_) {
+      return null;
+    }
   }
 
   void restoreFrom(List<Budget> budgets) {

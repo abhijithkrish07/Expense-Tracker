@@ -45,6 +45,9 @@ class DailyBackupService {
   static const _notificationChannelDescription =
       'Notifications for mandatory daily backup at 09:00';
 
+  static const _notificationIdReminder = 9001;
+  static const _notificationIdCompleted = 9002;
+
   static final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
   static bool _notificationsInitialized = false;
@@ -87,9 +90,9 @@ class DailyBackupService {
     final local = tz.local;
 
     await _notifications.zonedSchedule(
-      9001,
+      _notificationIdReminder,
       'Expense Tracker Backup',
-      'Mandatory backup check runs now. Keep app opened briefly.',
+      'Your daily backup will run now. Keep the app open briefly.',
       _nextInstanceOfNineAm(local),
       const NotificationDetails(
         android: AndroidNotificationDetails(
@@ -147,7 +150,7 @@ class DailyBackupService {
         : 'Daily Backup Completed';
 
     await _notifications.show(
-      9002,
+      _notificationIdCompleted,
       title,
       changedItems == 0
           ? 'No data changes today. Latest full snapshot refreshed.'

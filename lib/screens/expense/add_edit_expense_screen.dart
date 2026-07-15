@@ -173,7 +173,7 @@ class _AddEditExpenseScreenState extends ConsumerState<AddEditExpenseScreen> {
   Future<void> _showEditCategoryDialog(Category category) async {
     final nameController = TextEditingController(text: category.name);
     Color selectedColor = Color(
-      int.parse(category.colorHex.replaceAll('#', ''), radix: 16) + 0xFF000000,
+      0xFF000000 | int.parse(category.colorHex.replaceAll('#', ''), radix: 16),
     );
     String selectedIcon = category.iconName;
     final iconOptions = reservedCategoryIcons.contains(selectedIcon)
@@ -392,7 +392,8 @@ class _AddEditExpenseScreenState extends ConsumerState<AddEditExpenseScreen> {
               validator: (v) {
                 if (v == null || v.isEmpty) return 'Enter an amount';
                 final n = double.tryParse(v.replaceAll(',', ''));
-                if (n == null || n <= 0) return 'Enter a valid amount';
+                if (n == null || !n.isFinite || n <= 0) return 'Enter a valid amount';
+                if (n >= 1e12) return 'Amount is too large';
                 return null;
               },
             ),
@@ -439,11 +440,11 @@ class _AddEditExpenseScreenState extends ConsumerState<AddEditExpenseScreen> {
                     children: [
                       ...categories.map((cat) {
                         final color = Color(
-                          int.parse(
+                          0xFF000000 |
+                              int.parse(
                                 cat.colorHex.replaceAll('#', ''),
                                 radix: 16,
-                              ) +
-                              0xFF000000,
+                              ),
                         );
                         final isSelected = _selectedCategoryId == cat.id;
                         return FilterChip(

@@ -167,6 +167,6 @@ class _ExpenseTile extends StatelessWidget {
     if (category == null) return theme.colorScheme.primary;
     final parsed = int.tryParse(category!.colorHex.replaceAll('#', ''), radix: 16);
     if (parsed == null) return theme.colorScheme.primary;
-    return Color(parsed + 0xFF000000);
+    return Color(0xFF000000 | parsed);
   }
 }

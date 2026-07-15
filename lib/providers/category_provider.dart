@@ -80,9 +80,12 @@ class CategoryNotifier extends AsyncNotifier<List<Category>> {
   }
 
   Category? findById(String id) {
-    return (state.valueOrNull ?? [])
-        .cast<Category?>()
-        .firstWhere((c) => c?.id == id, orElse: () => null);
+    final categories = state.valueOrNull ?? [];
+    try {
+      return categories.firstWhere((c) => c.id == id);
+    } catch (_) {
+      return null;
+    }
   }
 
   void restoreFrom(List<Category> categories) {

@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/expense.dart';
@@ -46,7 +46,6 @@ class StorageService {
       await writeToPrefs(key, data);
     } else {
       await writeToFile(key, data);
-      await _secureStorage.delete(key: key);
     }
   }
 
@@ -82,7 +81,15 @@ class StorageService {
 
   Future<List<Expense>> loadExpenses() async {
     final list = await _read(_expensesKey);
-    return list.map(Expense.fromJson).toList();
+    final result = <Expense>[];
+    for (final json in list) {
+      try {
+        result.add(Expense.fromJson(json));
+      } catch (e) {
+        debugPrint('Skipping malformed expense: $e');
+      }
+    }
+    return result;
   }
 
   Future<void> saveExpenses(List<Expense> expenses) async {
@@ -91,7 +98,15 @@ class StorageService {
 
   Future<List<cat_model.Category>> loadCategories() async {
     final list = await _read(_categoriesKey);
-    return list.map(cat_model.Category.fromJson).toList();
+    final result = <cat_model.Category>[];
+    for (final json in list) {
+      try {
+        result.add(cat_model.Category.fromJson(json));
+      } catch (e) {
+        debugPrint('Skipping malformed category: $e');
+      }
+    }
+    return result;
   }
 
   Future<void> saveCategories(List<cat_model.Category> categories) async {
@@ -100,7 +115,15 @@ class StorageService {
 
   Future<List<Budget>> loadBudgets() async {
     final list = await _read(_budgetsKey);
-    return list.map(Budget.fromJson).toList();
+    final result = <Budget>[];
+    for (final json in list) {
+      try {
+        result.add(Budget.fromJson(json));
+      } catch (e) {
+        debugPrint('Skipping malformed budget: $e');
+      }
+    }
+    return result;
   }
 
   Future<void> saveBudgets(List<Budget> budgets) async {

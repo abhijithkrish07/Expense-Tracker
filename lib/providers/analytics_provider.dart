@@ -77,16 +77,20 @@ class AnalyticsSummary {
     }
     final avgPerDay = daysInPeriod > 0 ? totalSpent / daysInPeriod : 0.0;
 
-    // Last 6 months totals
+    // Last 6 months totals — single pass over full list
+    final monthTotals = <(int, int), double>{};
+    for (final e in all) {
+      final key = (e.date.year, e.date.month);
+      monthTotals[key] = (monthTotals[key] ?? 0) + e.amount;
+    }
     final last6 = <MonthlyTotal>[];
     for (int i = 5; i >= 0; i--) {
       final dt = DateTime(year, month - i, 1);
-      final y = dt.year;
-      final m = dt.month;
-      final total = all
-          .where((e) => e.date.year == y && e.date.month == m)
-          .fold(0.0, (sum, e) => sum + e.amount);
-      last6.add(MonthlyTotal(year: y, month: m, total: total));
+      last6.add(MonthlyTotal(
+        year: dt.year,
+        month: dt.month,
+        total: monthTotals[(dt.year, dt.month)] ?? 0,
+      ));
     }
 
     return AnalyticsSummary(

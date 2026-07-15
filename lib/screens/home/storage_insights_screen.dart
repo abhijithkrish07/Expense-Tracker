@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'storage_insights_provider.dart';
+import '../../providers/storage_insights_provider.dart';
 import 'widgets/storage_insights_cards.dart';
 import 'widgets/storage_insights_trend_card.dart';
 
