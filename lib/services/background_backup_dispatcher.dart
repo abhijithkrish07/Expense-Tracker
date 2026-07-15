@@ -1,5 +1,6 @@
 import 'dart:io' as io;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -28,6 +29,8 @@ void callbackDispatcher() {
 }
 
 Future<void> configureBackgroundBackupWork() async {
+  if (kIsWeb) return;
+
   if (io.Platform.isIOS || io.Platform.isAndroid) {
     await Workmanager().initialize(
       callbackDispatcher,
