@@ -349,8 +349,52 @@ class HomeScreen extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
   ) async {
+    // Wait for the drawer close animation before showing any overlay.
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!context.mounted) return;
+
     if (!kIsWeb) {
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Find Your Backup File'),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Your backup files are saved in:'),
+              SizedBox(height: 8),
+              Text(
+                'Downloads/ExpenseTracker_Backups/',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 12),
+              Text('Select this file to restore:'),
+              SizedBox(height: 8),
+              Text(
+                'ExpenseTracker_Backup_Latest.json',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Note: Delta backup files (ending in _Delta_…) cannot be used for restore.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Choose File'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
       if (!context.mounted) return;
     }
 
@@ -1956,7 +2000,7 @@ class _AppDrawer extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.restore_page_outlined),
             title: const Text('Restore Data Backup'),
-            subtitle: const Text('Select ExpenseTracker_Backup_Latest.json to restore'),
+            subtitle: const Text('Restore from Downloads/ExpenseTracker_Backups/'),
             onTap: () {
               Navigator.pop(context);
               onRestoreBackup();
