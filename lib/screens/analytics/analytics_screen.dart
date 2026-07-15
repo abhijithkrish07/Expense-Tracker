@@ -8,6 +8,7 @@ import '../../providers/category_provider.dart';
 import '../../utils/currency_formatter.dart';
 import '../../widgets/empty_state_widget.dart';
 import 'category_expenses_screen.dart';
+import 'compare_screen.dart';
 
 class AnalyticsScreen extends ConsumerWidget {
   const AnalyticsScreen({super.key});
@@ -30,7 +31,19 @@ class AnalyticsScreen extends ConsumerWidget {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Analytics')),
+      appBar: AppBar(
+        title: const Text('Analytics'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.compare_arrows),
+            tooltip: 'Compare months',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const CompareScreen()),
+            ),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

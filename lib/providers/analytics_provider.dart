@@ -108,3 +108,53 @@ final analyticsProvider = Provider<AnalyticsSummary>((ref) {
   final month = ref.watch(analyticsMonthProvider);
   return AnalyticsSummary.compute(expenses, month.year, month.month);
 });
+
+// ── Month comparison ─────────────────────────────────────────────────────────
+
+class MonthCompare {
+  final int year;
+  final int month;
+  final double total;
+  final double avgPerDay;
+  final List<CategoryTotal> categoryTotals;
+
+  const MonthCompare({
+    required this.year,
+    required this.month,
+    required this.total,
+    required this.avgPerDay,
+    required this.categoryTotals,
+  });
+
+  int get expenseCount => categoryTotals.fold(0, (sum, c) => sum + c.count);
+}
+
+class CompareData {
+  final MonthCompare monthA;
+  final MonthCompare monthB;
+
+  const CompareData({required this.monthA, required this.monthB});
+}
+
+final compareProvider =
+    Provider.family<CompareData, (DateTime, DateTime)>((ref, args) {
+  final expenses = ref.watch(expenseProvider).valueOrNull ?? [];
+  final a = AnalyticsSummary.compute(expenses, args.$1.year, args.$1.month);
+  final b = AnalyticsSummary.compute(expenses, args.$2.year, args.$2.month);
+  return CompareData(
+    monthA: MonthCompare(
+      year: args.$1.year,
+      month: args.$1.month,
+      total: a.totalSpent,
+      avgPerDay: a.avgPerDay,
+      categoryTotals: a.categoryTotals,
+    ),
+    monthB: MonthCompare(
+      year: args.$2.year,
+      month: args.$2.month,
+      total: b.totalSpent,
+      avgPerDay: b.avgPerDay,
+      categoryTotals: b.categoryTotals,
+    ),
+  );
+});
