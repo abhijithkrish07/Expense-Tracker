@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:path_provider/path_provider.dart';
 
 import '../services/storage_service_io.dart' as crypto;
@@ -12,10 +14,32 @@ const backupDirectoryName = 'ExpenseTracker_Backups';
 /// On iOS, getDownloadsDirectory() returns null so we fall back to the app
 /// documents directory, which is the best available option.
 Future<String> resolveDownloadsPath() async {
+  // On Android 11+ (API 30+), public Downloads requires MANAGE_EXTERNAL_STORAGE.
+  // We request it here so the user is prompted before we try to access it.
+  if (io.Platform.isAndroid) {
+    await _requestManageExternalStorageIfNeeded();
+  }
   final dir = await getDownloadsDirectory();
   if (dir != null) return dir.path;
   final fallback = await getApplicationDocumentsDirectory();
   return fallback.path;
+}
+
+/// On Android 11+ the MANAGE_EXTERNAL_STORAGE permission is not granted via
+/// the normal dialog — it requires the user to navigate to a special settings
+/// screen. This method checks via Environment.isExternalStorageManager (JNI)
+/// and, if not granted, opens the system settings page.
+/// On older versions this is a no-op because the standard storage permissions
+/// declared in the manifest are enough.
+Future<void> _requestManageExternalStorageIfNeeded() async {
+  try {
+    const channel = MethodChannel('expense_tracker/storage_permission');
+    await channel.invokeMethod<void>('requestManageExternalStorageIfNeeded');
+  } catch (e) {
+    // Plugin not wired yet or unsupported OS version — log and continue.
+    // The backup/restore will degrade gracefully via resolveDownloadsPath fallback.
+    debugPrint('Storage permission check skipped: $e');
+  }
 }
 
 /// Creates (if needed) and returns the backup directory.

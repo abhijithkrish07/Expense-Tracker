@@ -18,6 +18,7 @@ import '../../providers/home_provider.dart';
 import '../../providers/storage_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../utils/backup_utils.dart' as backup_utils;
+import '../../services/storage_service_io.dart' show StorageDecryptionException;
 import '../../widgets/empty_state_widget.dart';
 import '../analytics/analytics_screen.dart';
 import '../expense/add_edit_expense_screen.dart';
@@ -857,7 +858,34 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: expensesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) {
+          if (e is StorageDecryptionException) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock_open, size: 48, color: Colors.red),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Could not decrypt your data',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'The encryption key may have been lost (e.g. after a device reset). '
+                      'If you have a backup, use Restore Backup from the menu.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+          return Center(child: Text('Error loading data: $e'));
+        },
         data: (allExpenses) {
           final categories = categoriesAsync.valueOrNull ?? [];
           final budgets = budgetsAsync.valueOrNull ?? [];

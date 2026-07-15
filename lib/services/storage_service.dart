@@ -51,6 +51,7 @@ class StorageService {
   }
 
   Future<List<Map<String, dynamic>>> _readNativeWithMigration(String key) async {
+    // May throw StorageDecryptionException if the file exists but can't be decrypted.
     final fromFile = await readFromFile(key);
     if (fromFile.isNotEmpty) {
       return fromFile;
@@ -74,10 +75,26 @@ class StorageService {
       return fromFile;
     }
 
-    final migrated = await _readSecure(key);
-    await writeToFile(key, migrated);
-    await _secureStorage.write(key: '$_legacyMigratedPrefix$key', value: '1');
-    await _secureStorage.delete(key: key);
+    // Attempt to migrate legacy secure-storage data to encrypted file storage.
+    List<Map<String, dynamic>> migrated;
+    try {
+      migrated = await _readSecure(key);
+    } catch (e) {
+      debugPrint('Migration read failed for key "$key": $e');
+      // Do NOT mark as migrated — we'll retry next launch.
+      return [];
+    }
+
+    try {
+      await writeToFile(key, migrated);
+      await _secureStorage.write(key: '$_legacyMigratedPrefix$key', value: '1');
+      await _secureStorage.delete(key: key);
+    } catch (e) {
+      debugPrint('Migration write failed for key "$key": $e');
+      // Roll back migration marker so we retry next launch.
+      await _secureStorage.delete(key: '$_legacyMigratedPrefix$key');
+      return migrated; // Return in-memory data so this session works.
+    }
 
     await _consolidateMigrationIfComplete();
     return migrated;

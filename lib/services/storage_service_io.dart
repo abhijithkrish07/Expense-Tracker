@@ -33,11 +33,24 @@ Future<SecretKey> _getOrCreateMasterKey() async {
   return SecretKey(bytes);
 }
 
-Future<List<Map<String, dynamic>>> readFromFile(String key) async {
-  try {
-    final file = await _file(key);
-    if (!await file.exists()) return [];
+/// Thrown when an encrypted file exists but cannot be decrypted.
+/// This usually means the secure-storage key was lost (e.g. device reset,
+/// or secure storage cleared during an OS upgrade).
+class StorageDecryptionException implements Exception {
+  final String key;
+  const StorageDecryptionException(this.key);
 
+  @override
+  String toString() =>
+      'StorageDecryptionException: cannot decrypt data for key "$key". '
+      'The encryption key may have been lost.';
+}
+
+Future<List<Map<String, dynamic>>> readFromFile(String key) async {
+  final file = await _file(key);
+  if (!await file.exists()) return [];
+
+  try {
     final envelopeRaw = await file.readAsString();
     if (envelopeRaw.isEmpty) return [];
     final envelope = jsonDecode(envelopeRaw) as Map<String, dynamic>;
@@ -58,8 +71,9 @@ Future<List<Map<String, dynamic>>> readFromFile(String key) async {
     final jsonBytes = gzip.decode(clearBytes);
     final jsonString = utf8.decode(jsonBytes);
     return List<Map<String, dynamic>>.from(jsonDecode(jsonString) as List);
-  } catch (_) {
-    return [];
+  } catch (e) {
+    if (e is StorageDecryptionException) rethrow;
+    throw StorageDecryptionException(key);
   }
 }
 
