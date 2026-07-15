@@ -10,9 +10,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../models/budget.dart';
+import '../models/category.dart' as cat_model;
+import '../models/expense.dart';
 import '../services/storage_service.dart';
 
 enum BackupRunSource { foregroundApp, backgroundWorker }
+
+class FoundBackupInfo {
+  final DateTime createdAt;
+  final int expenseCount;
+  final int categoryCount;
+  final int budgetCount;
+
+  const FoundBackupInfo({
+    required this.createdAt,
+    required this.expenseCount,
+    required this.categoryCount,
+    required this.budgetCount,
+  });
+}
 
 class DailyBackupService {
   DailyBackupService._();
@@ -248,20 +265,73 @@ class DailyBackupService {
   }
 
   static Future<String> _resolveDownloadsPath() async {
-    if (io.Platform.isAndroid) {
-      final externalDir = await getExternalStorageDirectory();
-      if (externalDir == null) {
-        throw io.FileSystemException(
-          'Could not determine app-scoped external storage directory on Android',
-        );
+    // getDownloadsDirectory() returns the public Downloads folder on Android
+    // (survives uninstall) and ~/Downloads on macOS/desktop. On iOS it returns
+    // null, so we fall back to app documents which is the best available option.
+    final dir = await getDownloadsDirectory();
+    if (dir != null) return dir.path;
+
+    // iOS fallback: app documents directory
+    final fallback = await getApplicationDocumentsDirectory();
+    return fallback.path;
+  }
+
+  /// Returns backup metadata (createdAt, expense/category/budget counts) if a
+  /// full backup file exists in the backup directory, null otherwise.
+  static Future<FoundBackupInfo?> findLatestBackup() async {
+    if (kIsWeb) return null;
+    try {
+      final downloadsPath = await _resolveDownloadsPath();
+      final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
+      if (!await backupDir.exists()) return null;
+
+      final payload = await _loadLatestFullBackup(backupDir);
+      if (payload == null) return null;
+
+      final createdAt = DateTime.tryParse(payload['createdAt'] as String? ?? '');
+      if (createdAt == null) return null;
+
+      return FoundBackupInfo(
+        createdAt: createdAt,
+        expenseCount: (payload['expenses'] as List?)?.length ?? 0,
+        categoryCount: (payload['categories'] as List?)?.length ?? 0,
+        budgetCount: (payload['budgets'] as List?)?.length ?? 0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Restores data from the latest full backup file into StorageService.
+  /// Returns true on success, false if the file is missing or corrupt.
+  static Future<bool> restoreFromLatestBackup() async {
+    if (kIsWeb) return false;
+    try {
+      final downloadsPath = await _resolveDownloadsPath();
+      final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
+      final payload = await _loadLatestFullBackup(backupDir);
+      if (payload == null) return false;
+
+      List<T> asMaps<T>(String key) {
+        final raw = payload[key];
+        if (raw is! List) return <T>[];
+        return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList().cast<T>();
       }
-      return externalDir.path;
+
+      final storage = StorageService();
+      await storage.saveCategories(
+        asMaps<Map<String, dynamic>>('categories').map(cat_model.Category.fromJson).toList(),
+      );
+      await storage.saveBudgets(
+        asMaps<Map<String, dynamic>>('budgets').map(Budget.fromJson).toList(),
+      );
+      await storage.saveExpenses(
+        asMaps<Map<String, dynamic>>('expenses').map(Expense.fromJson).toList(),
+      );
+      return true;
+    } catch (_) {
+      return false;
     }
-    final homeDir = io.Platform.environment['HOME'] ?? '';
-    if (homeDir.isEmpty) {
-      throw 'Could not determine home directory';
-    }
-    return '$homeDir/Downloads';
   }
 
   static Future<Map<String, dynamic>?> _loadLatestFullBackup(

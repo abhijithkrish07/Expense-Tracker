@@ -84,4 +84,8 @@ class CategoryNotifier extends AsyncNotifier<List<Category>> {
         .cast<Category?>()
         .firstWhere((c) => c?.id == id, orElse: () => null);
   }
+
+  void restoreFrom(List<Category> categories) {
+    state = AsyncData(categories);
+  }
 }

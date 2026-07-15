@@ -3,6 +3,7 @@ import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -148,20 +149,10 @@ class HomeScreen extends ConsumerWidget {
   }
 
   static Future<String> _resolveDownloadsPath() async {
-    if (io.Platform.isAndroid) {
-      final externalDir = await getExternalStorageDirectory();
-      if (externalDir == null) {
-        throw io.FileSystemException(
-          'Could not determine app-scoped external storage directory on Android',
-        );
-      }
-      return externalDir.path;
-    }
-    final homeDir = io.Platform.environment['HOME'] ?? '';
-    if (homeDir.isEmpty) {
-      throw 'Could not determine home directory';
-    }
-    return '$homeDir/Downloads';
+    final dir = await getDownloadsDirectory();
+    if (dir != null) return dir.path;
+    final fallback = await getApplicationDocumentsDirectory();
+    return fallback.path;
   }
 
   static Future<io.Directory> _resolveBackupDirectory() async {
@@ -358,12 +349,20 @@ class HomeScreen extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
   ) async {
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    if (!context.mounted) return;
+    if (!kIsWeb) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!context.mounted) return;
+    }
+
+    // Capture current counts before the async file picker gap.
+    final currentExpenseCount = ref.read(expenseProvider).valueOrNull?.length ?? 0;
+    final currentCategoryCount = ref.read(categoryProvider).valueOrNull?.length ?? 0;
+    final currentBudgetCount = ref.read(budgetProvider).valueOrNull?.length ?? 0;
+    final storage = ref.read(storageServiceProvider);
 
     final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json'],
+      type: kIsWeb ? FileType.any : FileType.custom,
+      allowedExtensions: kIsWeb ? null : ['json'],
       withData: true,
     );
     if (picked == null) return;
@@ -416,10 +415,6 @@ class HomeScreen extends ConsumerWidget {
       return;
     }
 
-    final currentExpenses = ref.read(expenseProvider).valueOrNull ?? <Expense>[];
-    final currentCategories = ref.read(categoryProvider).valueOrNull ?? <Category>[];
-    final currentBudgets = ref.read(budgetProvider).valueOrNull ?? <Budget>[];
-
     if (!context.mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -427,9 +422,9 @@ class HomeScreen extends ConsumerWidget {
         title: const Text('Restore Backup'),
         content: Text(
           'This will replace your current local data.\n\n'
-          'Current: ${_humanCount(currentExpenses.length, 'expense')}, '
-          '${_humanCount(currentCategories.length, 'category')}, '
-          '${_humanCount(currentBudgets.length, 'budget')}\n'
+          'Current: ${_humanCount(currentExpenseCount, 'expense')}, '
+          '${_humanCount(currentCategoryCount, 'category')}, '
+          '${_humanCount(currentBudgetCount, 'budget')}\n'
           'Backup: ${_humanCount(expenses.length, 'expense')}, '
           '${_humanCount(categories.length, 'category')}, '
           '${_humanCount(budgets.length, 'budget')}\n\n'
@@ -450,14 +445,13 @@ class HomeScreen extends ConsumerWidget {
 
     if (confirmed != true) return;
 
-    final storage = ref.read(storageServiceProvider);
     await storage.saveCategories(categories);
     await storage.saveBudgets(budgets);
     await storage.saveExpenses(expenses);
 
-    ref.invalidate(categoryProvider);
-    ref.invalidate(budgetProvider);
-    ref.invalidate(expenseProvider);
+    ref.read(categoryProvider.notifier).restoreFrom(categories);
+    ref.read(budgetProvider.notifier).restoreFrom(budgets);
+    ref.read(expenseProvider.notifier).restoreFrom(expenses);
 
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1299,7 +1293,10 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      drawer: const _AppDrawer(),
+      drawer: _AppDrawer(
+        onCreateBackup: () => _createRecoveryBackup(context, ref),
+        onRestoreBackup: () => _restoreFromBackup(context, ref),
+      ),
       body: expensesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
@@ -1859,11 +1856,17 @@ class _ExpenseTile extends StatelessWidget {
   }
 }
 
-class _AppDrawer extends ConsumerWidget {
-  const _AppDrawer();
+class _AppDrawer extends StatelessWidget {
+  final Future<void> Function() onCreateBackup;
+  final Future<void> Function() onRestoreBackup;
+
+  const _AppDrawer({
+    required this.onCreateBackup,
+    required this.onRestoreBackup,
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
@@ -1945,22 +1948,18 @@ class _AppDrawer extends ConsumerWidget {
             leading: const Icon(Icons.backup_outlined),
             title: const Text('Create Data Backup'),
             subtitle: const Text('Create compact delta + refresh latest full backup'),
-            onTap: () async {
+            onTap: () {
               Navigator.pop(context);
-              await Future<void>.delayed(const Duration(milliseconds: 250));
-              if (!context.mounted) return;
-              await HomeScreen._createRecoveryBackup(context, ref);
+              onCreateBackup();
             },
           ),
           ListTile(
             leading: const Icon(Icons.restore_page_outlined),
             title: const Text('Restore Data Backup'),
             subtitle: const Text('Select ExpenseTracker_Backup_Latest.json to restore'),
-            onTap: () async {
+            onTap: () {
               Navigator.pop(context);
-              await Future<void>.delayed(const Duration(milliseconds: 250));
-              if (!context.mounted) return;
-              await HomeScreen._restoreFromBackup(context, ref);
+              onRestoreBackup();
             },
           ),
         ],

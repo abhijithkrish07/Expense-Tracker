@@ -24,21 +24,10 @@ class HomeActions {
   static const _uuid = Uuid();
 
   static Future<String> _resolveDownloadsPath() async {
-    if (io.Platform.isAndroid) {
-      final externalDir = await getExternalStorageDirectory();
-      if (externalDir == null) {
-        throw io.FileSystemException(
-          'Could not determine app-scoped external storage directory on Android',
-        );
-      }
-      return externalDir.path;
-    }
-
-    final homeDir = io.Platform.environment['HOME'] ?? '';
-    if (homeDir.isEmpty) {
-      throw 'Could not determine home directory';
-    }
-    return '$homeDir/Downloads';
+    final dir = await getDownloadsDirectory();
+    if (dir != null) return dir.path;
+    final fallback = await getApplicationDocumentsDirectory();
+    return fallback.path;
   }
 
   Future<void> openAddExpense(BuildContext context) async {

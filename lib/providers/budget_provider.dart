@@ -59,4 +59,8 @@ class BudgetNotifier extends AsyncNotifier<List<Budget>> {
                 b?.categoryId == categoryId,
             orElse: () => null);
   }
+
+  void restoreFrom(List<Budget> budgets) {
+    state = AsyncData(budgets);
+  }
 }

@@ -84,6 +84,10 @@ class ExpenseNotifier extends AsyncNotifier<List<Expense>> {
     return current.length;
   }
 
+  void restoreFrom(List<Expense> expenses) {
+    state = AsyncData(expenses);
+  }
+
   Set<String> get allUsedTags {
     final expenses = state.valueOrNull ?? [];
     return expenses.expand((e) => e.tags).toSet();
