@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io' as io;
-import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
@@ -9,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
-import 'package:uuid/uuid.dart';
 import '../../models/expense.dart';
 import '../../models/category.dart';
 import '../../models/budget.dart';
@@ -25,22 +23,7 @@ import '../analytics/analytics_screen.dart';
 import '../expense/add_edit_expense_screen.dart';
 import 'widgets/home_app_drawer.dart';
 import 'widgets/home_expense_list.dart';
-import 'widgets/home_fab.dart';
 import 'widgets/home_summary_widgets.dart';
-
-class _PendingImportExpense {
-  final String categoryName;
-  final double amount;
-  final DateTime expenseDate;
-  final String sheetName;
-
-  const _PendingImportExpense({
-    required this.categoryName,
-    required this.amount,
-    required this.expenseDate,
-    required this.sheetName,
-  });
-}
 
 class _AppBackupPayload {
   final DateTime createdAt;
@@ -113,7 +96,6 @@ class _AppBackupPayload {
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
-  static const _uuid = Uuid();
   static const _backupSchemaVersion = 1;
   static const _latestFullBackupFileName = 'ExpenseTracker_Backup_Latest.json';
   static const _maxDeltaBackupFiles = 24;
@@ -438,420 +420,6 @@ class HomeScreen extends ConsumerWidget {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Backup restored successfully.')),
     );
-  }
-
-  Future<bool> _showImportFormatGuide(BuildContext context) async {
-    final proceed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Excel Import Format'),
-        content: const Text(
-          'Expected columns (2):\n'
-          '1) Category\n'
-          '2) Expense\n\n'
-          'Example:\n'
-          'Food | 250\n'
-          'Transport | 80\n'
-          'Shopping | 1200\n'
-          'Food | 200+15+30 (imports as 3 separate expenses)\n'
-          'Total Expenses | 1530\n\n'
-          'Import will stop before the row where Category is "Total Expenses".',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Choose File'),
-          ),
-        ],
-      ),
-    );
-    return proceed ?? false;
-  }
-
-  Future<void> _importExpensesFromExcel(
-    BuildContext context,
-    WidgetRef ref,
-  ) async {
-    // Avoid opening dialogs while the drawer close animation is in progress.
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    if (!context.mounted) return;
-
-    final shouldPickFile = await _showImportFormatGuide(context);
-    if (!shouldPickFile) return;
-
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['xlsx', 'xls'],
-      withData: true,
-    );
-    if (picked == null) return;
-
-    final Uint8List? bytes = picked.files.single.bytes;
-    if (bytes == null) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not read selected file.')),
-        );
-      }
-      return;
-    }
-
-    final excel = Excel.decodeBytes(bytes);
-    if (excel.tables.isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No sheets found in Excel file.')),
-        );
-      }
-      return;
-    }
-
-    final categoryNotifier = ref.read(categoryProvider.notifier);
-    final expenseNotifier = ref.read(expenseProvider.notifier);
-    final categories = ref.read(categoryProvider).valueOrNull ?? <Category>[];
-    final categoryByName = <String, Category>{
-      for (final c in categories) c.name.trim().toLowerCase(): c,
-    };
-
-    final pendingImports = <_PendingImportExpense>[];
-    var skipped = 0;
-    var stopMarkerReachedCount = 0;
-    var validSheetCount = 0;
-    var skippedSheetCount = 0;
-
-    for (final entry in excel.tables.entries) {
-      final sheetName = entry.key;
-      final sheet = entry.value;
-
-      final monthDate = _inferMonthDateFromSheetName(sheetName);
-      if (monthDate == null) {
-        skippedSheetCount++;
-        continue;
-      }
-
-      validSheetCount++;
-      var stopReachedInThisSheet = false;
-
-      for (final row in sheet.rows) {
-        if (row.length < 2) {
-          skipped++;
-          continue;
-        }
-
-        final categoryName = _cellAsText(row[0]);
-        if (categoryName == null || categoryName.isEmpty) {
-          skipped++;
-          continue;
-        }
-
-        if (categoryName.toLowerCase() == 'total expenses') {
-          stopReachedInThisSheet = true;
-          break;
-        }
-
-        final amounts = _cellAsAmounts(row[1]);
-        if (amounts == null || amounts.isEmpty) {
-          skipped++;
-          continue;
-        }
-
-        for (final amount in amounts) {
-          if (amount <= 0) {
-            skipped++;
-            continue;
-          }
-
-          pendingImports.add(
-            _PendingImportExpense(
-              categoryName: categoryName,
-              amount: amount,
-              expenseDate: monthDate,
-              sheetName: sheetName,
-            ),
-          );
-        }
-      }
-
-      if (stopReachedInThisSheet) {
-        stopMarkerReachedCount++;
-      }
-    }
-
-    final categoriesToCreate = pendingImports
-        .map((e) => e.categoryName.trim().toLowerCase())
-        .where((name) => !categoryByName.containsKey(name))
-        .toSet()
-        .length;
-
-    if (!context.mounted) return;
-
-    final shouldImport = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Preview'),
-        content: Text(
-          'Rows to import: ${pendingImports.length}\n'
-          'Rows skipped: $skipped\n'
-          'Sheets recognized: $validSheetCount\n'
-          'Sheets skipped (name not recognized): $skippedSheetCount\n'
-          'New categories to create: $categoriesToCreate\n'
-          'Sheets with stop marker: $stopMarkerReachedCount\n\n'
-          'Continue importing?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Import'),
-          ),
-        ],
-      ),
-    );
-
-    if (shouldImport != true) return;
-
-    final expensesToImport = <Expense>[];
-
-    for (final pending in pendingImports) {
-      final key = pending.categoryName.toLowerCase();
-      var category = categoryByName[key];
-      if (category == null) {
-        category = await categoryNotifier.addCategory(
-          name: pending.categoryName,
-          colorHex: '#9E9E9E',
-          iconName: 'more_horiz',
-        );
-        categoryByName[key] = category;
-      }
-
-      expensesToImport.add(
-        Expense(
-          id: _uuid.v4(),
-          title: category.name,
-          amount: pending.amount,
-          date: pending.expenseDate,
-          categoryId: category.id,
-          note: 'Imported from Excel (${pending.sheetName})',
-        ),
-      );
-    }
-
-    await expenseNotifier.addExpensesBulk(expensesToImport);
-
-    final imported = expensesToImport.length;
-
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            imported > 0
-                ? 'Imported $imported expense${imported == 1 ? '' : 's'} from Excel${skipped > 0 ? ' ($skipped skipped)' : ''}.'
-                : 'No valid expenses found to import.',
-          ),
-        ),
-      );
-    }
-  }
-
-  String? _cellAsText(dynamic cell) {
-    final value = _rawCellValue(cell);
-    if (value == null) return null;
-    final text = value.toString().trim();
-    return text.isEmpty ? null : text;
-  }
-
-  List<double>? _cellAsAmounts(dynamic cell) {
-    final value = _rawCellValue(cell);
-    if (value == null) return null;
-    if (value is num) return [value.toDouble()];
-
-    var raw = value.toString().trim();
-    if (raw.isEmpty) return null;
-
-    // Handle Excel-style formulas entered as plain text, e.g. "=202+13".
-    if (raw.startsWith('=')) {
-      raw = raw.substring(1);
-    }
-
-    // For inputs like "200+15+30", create separate imported expense entries.
-    if (raw.contains('+')) {
-      final parts = raw
-          .split('+')
-          .map((part) => part.trim())
-          .where((part) => part.isNotEmpty)
-          .toList();
-
-      if (parts.isEmpty) return null;
-
-      final parsed = <double>[];
-      for (final part in parts) {
-        final amount = _parseSingleAmount(part);
-        if (amount == null) return null;
-        parsed.add(amount);
-      }
-
-      return parsed;
-    }
-
-    final singleAmount = _parseSingleAmount(raw);
-    if (singleAmount == null) return null;
-    return [singleAmount];
-  }
-
-  double? _parseSingleAmount(String raw) {
-    if (raw.isEmpty) return null;
-
-    final hasArithmeticOperator = RegExp(r'[+\-*/]').hasMatch(raw);
-    if (hasArithmeticOperator) {
-      final evaluated = _evaluateSimpleExpression(raw);
-      if (evaluated != null) return evaluated;
-      return null;
-    }
-
-    // Fast path for plain numeric values with optional commas/currency symbols.
-    final normalizedNumeric = raw
-        .replaceAll(',', '')
-        .replaceAll(RegExp(r'[^0-9.\-]'), '');
-    final directNumber = double.tryParse(normalizedNumeric);
-    if (directNumber != null) return directNumber;
-
-    return null;
-  }
-
-  double? _evaluateSimpleExpression(String input) {
-    var expression = input.replaceAll(' ', '').replaceAll(',', '');
-    expression = expression.replaceAll(RegExp(r'[^0-9.+\-*/]'), '');
-    if (expression.isEmpty) return null;
-
-    // Make a leading negative number parseable as binary operation.
-    if (expression.startsWith('-')) {
-      expression = '0$expression';
-    }
-
-    final tokenMatches = RegExp(
-      r'(\d+(?:\.\d+)?)|[+\-*/]',
-    ).allMatches(expression).map((m) => m.group(0)!).toList();
-
-    if (tokenMatches.isEmpty || tokenMatches.join() != expression) return null;
-    if (tokenMatches.first.length == 1 && '+-*/'.contains(tokenMatches.first)) {
-      return null;
-    }
-
-    final firstNumber = double.tryParse(tokenMatches.first);
-    if (firstNumber == null) return null;
-
-    final values = <double>[];
-    final addSubOps = <String>[];
-    var current = firstNumber;
-
-    var i = 1;
-    while (i + 1 < tokenMatches.length) {
-      final op = tokenMatches[i];
-      final next = double.tryParse(tokenMatches[i + 1]);
-      if (next == null) return null;
-
-      if (op == '*') {
-        current *= next;
-      } else if (op == '/') {
-        if (next == 0) return null;
-        current /= next;
-      } else if (op == '+' || op == '-') {
-        values.add(current);
-        addSubOps.add(op);
-        current = next;
-      } else {
-        return null;
-      }
-
-      i += 2;
-    }
-
-    if (i != tokenMatches.length) return null;
-
-    values.add(current);
-    var result = values.first;
-    for (var j = 0; j < addSubOps.length; j++) {
-      result = addSubOps[j] == '+'
-          ? result + values[j + 1]
-          : result - values[j + 1];
-    }
-
-    return result;
-  }
-
-  DateTime? _inferMonthDateFromSheetName(String sheetName) {
-    var normalized = sheetName.trim().toUpperCase();
-    if (normalized.isEmpty) return null;
-
-    normalized = normalized
-        .replaceAll(RegExp(r"[^A-Z0-9]"), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-
-    const monthMap = <String, int>{
-      'JAN': 1,
-      'JANUARY': 1,
-      'FEB': 2,
-      'FEBRUARY': 2,
-      'MAR': 3,
-      'MARCH': 3,
-      'APR': 4,
-      'APRIL': 4,
-      'MAY': 5,
-      'JUN': 6,
-      'JUNE': 6,
-      'JUL': 7,
-      'JULY': 7,
-      'AUG': 8,
-      'AUGUST': 8,
-      'SEP': 9,
-      'SEPT': 9,
-      'SEPTEMBER': 9,
-      'OCT': 10,
-      'OCTOBER': 10,
-      'NOV': 11,
-      'NOVEMBER': 11,
-      'DEC': 12,
-      'DECEMBER': 12,
-    };
-
-    int? month;
-    for (final entry in monthMap.entries) {
-      if (normalized.contains(entry.key)) {
-        month = entry.value;
-        break;
-      }
-    }
-    if (month == null) return null;
-
-    final yearMatches = RegExp(
-      r'\d{2,4}',
-    ).allMatches(normalized).map((m) => m.group(0)!).toList();
-    if (yearMatches.isEmpty) return null;
-
-    final rawYear = yearMatches.last;
-    final parsed = int.tryParse(rawYear);
-    if (parsed == null) return null;
-
-    final year = rawYear.length == 2 ? (2000 + parsed) : parsed;
-    if (year < 2000 || year > 2100) return null;
-
-    return DateTime(year, month, 1);
-  }
-
-  dynamic _rawCellValue(dynamic cell) {
-    try {
-      return cell?.value;
-    } catch (_) {
-      return cell;
-    }
   }
 
   Future<void> _openAddExpense(BuildContext context) async {
@@ -1276,8 +844,16 @@ class HomeScreen extends ConsumerWidget {
         ],
       ),
       drawer: HomeAppDrawer(
+        selectedMonth: selectedMonth,
+        canDeleteMonthlyExpenses: monthExpenseCount > 0,
+        canDeleteAllYearsExpenses:
+            (expensesAsync.valueOrNull ?? const []).isNotEmpty,
+        onExportExpenses: () => _exportExpensesToExcel(context, ref),
         onCreateBackup: () => _createRecoveryBackup(context, ref),
         onRestoreBackup: () => _restoreFromBackup(context, ref),
+        onDeleteMonthlyExpenses: () =>
+            _deleteMonthlyExpenses(context, ref, selectedMonth),
+        onDeleteAllYearsExpenses: () => _deleteAllYearsExpenses(context, ref),
       ),
       body: expensesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -1340,16 +916,11 @@ class HomeScreen extends ConsumerWidget {
           );
         },
       ),
-      floatingActionButton: ExpandableHomeFab(
-        onAddExpense: () => _openAddExpense(context),
-        onImportExpenses: () => _importExpensesFromExcel(context, ref),
-        onExportExpenses: () => _exportExpensesToExcel(context, ref),
-        onDeleteMonthlyExpenses: () =>
-            _deleteMonthlyExpenses(context, ref, selectedMonth),
-        onDeleteAllYearsExpenses: () => _deleteAllYearsExpenses(context, ref),
-        canDeleteMonthlyExpenses: monthExpenseCount > 0,
-        canDeleteAllYearsExpenses:
-            (expensesAsync.valueOrNull ?? const []).isNotEmpty,
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'home-fab-add-expense',
+        tooltip: 'Add expense',
+        onPressed: () => _openAddExpense(context),
+        child: const Icon(Icons.add),
       ),
     );
   }
