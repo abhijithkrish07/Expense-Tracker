@@ -17,6 +17,7 @@ class StorageService {
   static const _themeModeKey = 'theme_mode';
 
   static const _legacyMigratedPrefix = 'legacy_migrated_';
+  static const _legacyMigrationCompleteKey = 'legacy_migration_complete_v1';
   static const _insightsHistoryKey = 'storage_insights_history_v1';
   static const _maxInsightSnapshots = 30;
   static const _trackedDataKeys = <String>[
@@ -55,10 +56,21 @@ class StorageService {
       return fromFile;
     }
 
+    // Check if a consolidated migration-complete marker exists; if so, all
+    // per-key legacy data has already been migrated and deleted.
+    final migrationComplete = await _secureStorage.read(
+      key: _legacyMigrationCompleteKey,
+    );
+    if (migrationComplete == '1') {
+      return fromFile;
+    }
+
     final migrationMarker = await _secureStorage.read(
       key: '$_legacyMigratedPrefix$key',
     );
     if (migrationMarker == '1') {
+      // This key was already migrated; check if all tracked keys are done.
+      await _consolidateMigrationIfComplete();
       return fromFile;
     }
 
@@ -66,7 +78,23 @@ class StorageService {
     await writeToFile(key, migrated);
     await _secureStorage.write(key: '$_legacyMigratedPrefix$key', value: '1');
     await _secureStorage.delete(key: key);
+
+    await _consolidateMigrationIfComplete();
     return migrated;
+  }
+
+  Future<void> _consolidateMigrationIfComplete() async {
+    for (final key in _trackedDataKeys) {
+      final marker = await _secureStorage.read(
+        key: '$_legacyMigratedPrefix$key',
+      );
+      if (marker != '1') return;
+    }
+    // All keys migrated — write consolidated marker and clean up per-key markers.
+    await _secureStorage.write(key: _legacyMigrationCompleteKey, value: '1');
+    for (final key in _trackedDataKeys) {
+      await _secureStorage.delete(key: '$_legacyMigratedPrefix$key');
+    }
   }
 
   Future<List<Map<String, dynamic>>> _readSecure(String key) async {

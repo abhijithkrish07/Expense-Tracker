@@ -30,12 +30,13 @@ class HomeExpenseList extends ConsumerWidget {
       final key = formatDayHeader(expense.date);
       grouped.putIfAbsent(key, () => []).add(expense);
     }
+    final dateKeys = grouped.keys.toList();
 
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 80),
       itemCount: grouped.length,
       itemBuilder: (context, index) {
-        final dateKey = grouped.keys.elementAt(index);
+        final dateKey = dateKeys[index];
         final dayExpenses = grouped[dateKey]!;
         final dayTotal = dayExpenses.fold(0.0, (sum, e) => sum + e.amount);
 

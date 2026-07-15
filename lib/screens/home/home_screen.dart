@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/expense.dart';
 import '../../models/category.dart';
@@ -20,15 +19,14 @@ import '../../providers/budget_provider.dart';
 import '../../providers/home_provider.dart';
 import '../../providers/storage_provider.dart';
 import '../../providers/theme_provider.dart';
-import '../../utils/currency_formatter.dart';
-import '../../utils/date_helpers.dart';
-import '../../utils/category_icons.dart';
+import '../../utils/backup_utils.dart' as backup_utils;
 import '../../widgets/empty_state_widget.dart';
-import '../expense/add_edit_expense_screen.dart';
 import '../analytics/analytics_screen.dart';
-import '../categories/categories_screen.dart';
-import '../budget/budget_settings_screen.dart';
-import 'storage_insights_screen.dart';
+import '../expense/add_edit_expense_screen.dart';
+import 'widgets/home_app_drawer.dart';
+import 'widgets/home_expense_list.dart';
+import 'widgets/home_fab.dart';
+import 'widgets/home_summary_widgets.dart';
 
 class _PendingImportExpense {
   final String categoryName;
@@ -117,7 +115,6 @@ class HomeScreen extends ConsumerWidget {
 
   static const _uuid = Uuid();
   static const _backupSchemaVersion = 1;
-  static const _backupDirectoryName = 'ExpenseTracker_Backups';
   static const _latestFullBackupFileName = 'ExpenseTracker_Backup_Latest.json';
   static const _maxDeltaBackupFiles = 24;
 
@@ -143,74 +140,19 @@ class HomeScreen extends ConsumerWidget {
     return input.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
   }
 
-  static Future<String> _resolveDownloadsPath() async {
-    final dir = await getDownloadsDirectory();
-    if (dir != null) return dir.path;
-    final fallback = await getApplicationDocumentsDirectory();
-    return fallback.path;
-  }
-
-  static Future<io.Directory> _resolveBackupDirectory() async {
-    final downloadsPath = await _resolveDownloadsPath();
-    final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
-    await backupDir.create(recursive: true);
-    return backupDir;
-  }
-
   static Future<_AppBackupPayload?> _loadLatestFullBackup(
     io.Directory backupDir,
   ) async {
     final latestFile = io.File('${backupDir.path}/$_latestFullBackupFileName');
-    if (!await latestFile.exists()) return null;
-
     try {
-      final content = await latestFile.readAsString();
+      final content = await backup_utils.readEncryptedBackup(latestFile);
+      if (content == null) return null;
       final decoded = jsonDecode(content);
       if (decoded is! Map<String, dynamic>) return null;
       return _AppBackupPayload.tryParse(decoded);
     } catch (_) {
       return null;
     }
-  }
-
-  static Map<String, Map<String, dynamic>> _indexById(
-    List<Map<String, dynamic>> rows,
-  ) {
-    final indexed = <String, Map<String, dynamic>>{};
-    for (final row in rows) {
-      final id = row['id'];
-      if (id is String && id.isNotEmpty) {
-        indexed[id] = row;
-      }
-    }
-    return indexed;
-  }
-
-  static ({List<Map<String, dynamic>> upsert, List<String> delete})
-      _computeCollectionDelta(
-    List<Map<String, dynamic>> previous,
-    List<Map<String, dynamic>> current,
-  ) {
-    final prevById = _indexById(previous);
-    final currentById = _indexById(current);
-
-    final upsert = <Map<String, dynamic>>[];
-    final deleted = <String>[];
-
-    for (final entry in currentById.entries) {
-      final previousRow = prevById[entry.key];
-      if (previousRow == null || jsonEncode(previousRow) != jsonEncode(entry.value)) {
-        upsert.add(entry.value);
-      }
-    }
-
-    for (final id in prevById.keys) {
-      if (!currentById.containsKey(id)) {
-        deleted.add(id);
-      }
-    }
-
-    return (upsert: upsert, delete: deleted);
   }
 
   static Future<void> _pruneOldDeltaBackups(io.Directory backupDir) async {
@@ -238,7 +180,7 @@ class HomeScreen extends ConsumerWidget {
     required _AppBackupPayload payload,
     required String filePrefix,
   }) async {
-    final backupDir = await _resolveBackupDirectory();
+    final backupDir = await backup_utils.resolveBackupDirectory();
 
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     final safePrefix = _sanitizeFileLabel(filePrefix);
@@ -247,7 +189,7 @@ class HomeScreen extends ConsumerWidget {
     final file = io.File(filePath);
 
     final encoded = const JsonEncoder.withIndent('  ').convert(payload.toJson());
-    await file.writeAsString(encoded);
+    await backup_utils.writeEncryptedBackup(file, encoded);
 
     return file;
   }
@@ -259,15 +201,15 @@ class HomeScreen extends ConsumerWidget {
     String filePrefix = 'ExpenseTracker_Backup',
   }) async {
     final payload = _buildBackupPayload(ref);
-    final backupDir = await _resolveBackupDirectory();
+    final backupDir = await backup_utils.resolveBackupDirectory();
     final previous = await _loadLatestFullBackup(backupDir);
 
     io.File? deltaFile;
     var changedItems = 0;
     if (previous != null) {
-      final expenseDelta = _computeCollectionDelta(previous.expenses, payload.expenses);
-      final categoryDelta = _computeCollectionDelta(previous.categories, payload.categories);
-      final budgetDelta = _computeCollectionDelta(previous.budgets, payload.budgets);
+      final expenseDelta = backup_utils.computeCollectionDelta(previous.expenses, payload.expenses);
+      final categoryDelta = backup_utils.computeCollectionDelta(previous.categories, payload.categories);
+      final budgetDelta = backup_utils.computeCollectionDelta(previous.budgets, payload.budgets);
 
       changedItems =
           expenseDelta.upsert.length +
@@ -305,7 +247,7 @@ class HomeScreen extends ConsumerWidget {
           },
         };
         final encodedDelta = const JsonEncoder.withIndent('  ').convert(deltaPayload);
-        await deltaFile.writeAsString(encodedDelta);
+        await backup_utils.writeEncryptedBackup(deltaFile, encodedDelta);
       }
     }
 
@@ -313,7 +255,7 @@ class HomeScreen extends ConsumerWidget {
       '${backupDir.path}/$_latestFullBackupFileName',
     );
     final encodedFull = const JsonEncoder.withIndent('  ').convert(payload.toJson());
-    await latestFullFile.writeAsString(encodedFull);
+    await backup_utils.writeEncryptedBackup(latestFullFile, encodedFull);
     await _pruneOldDeltaBackups(backupDir);
 
     io.File? fullArchiveFile;
@@ -1223,8 +1165,7 @@ class HomeScreen extends ConsumerWidget {
 
     // Save the file
     try {
-      // Get Downloads directory based on platform
-      final downloadsPath = await _resolveDownloadsPath();
+      final downloadsPath = await backup_utils.resolveDownloadsPath();
       final downloadsDir = io.Directory(downloadsPath);
       await downloadsDir.create(recursive: true);
 
@@ -1334,7 +1275,7 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      drawer: _AppDrawer(
+      drawer: HomeAppDrawer(
         onCreateBackup: () => _createRecoveryBackup(context, ref),
         onRestoreBackup: () => _restoreFromBackup(context, ref),
       ),
@@ -1371,11 +1312,18 @@ class HomeScreen extends ConsumerWidget {
 
           return Column(
             children: [
-              // Month selector
-              _MonthSelector(selectedMonth: selectedMonth),
-              // Budget card
-              _BudgetCard(totalSpent: totalSpent, budget: budget?.limitAmount),
-              // Expense list
+              HomeMonthSelector(
+                selectedMonth: selectedMonth,
+                onPrevious: () => ref.read(homeMonthProvider.notifier).state =
+                    DateTime(selectedMonth.year, selectedMonth.month - 1),
+                onNext: () {
+                  final next = DateTime(selectedMonth.year, selectedMonth.month + 1);
+                  if (!next.isAfter(DateTime.now())) {
+                    ref.read(homeMonthProvider.notifier).state = next;
+                  }
+                },
+              ),
+              HomeBudgetCard(totalSpent: totalSpent, budget: budget?.limitAmount),
               Expanded(
                 child: monthExpenses.isEmpty
                     ? const EmptyStateWidget(
@@ -1383,7 +1331,7 @@ class HomeScreen extends ConsumerWidget {
                         title: 'No expenses yet',
                         subtitle: 'Tap + to add your first expense',
                       )
-                    : _ExpenseList(
+                    : HomeExpenseList(
                         expenses: monthExpenses,
                         categories: categories,
                       ),
@@ -1392,7 +1340,7 @@ class HomeScreen extends ConsumerWidget {
           );
         },
       ),
-      floatingActionButton: _ExpandableHomeFab(
+      floatingActionButton: ExpandableHomeFab(
         onAddExpense: () => _openAddExpense(context),
         onImportExpenses: () => _importExpensesFromExcel(context, ref),
         onExportExpenses: () => _exportExpensesToExcel(context, ref),
@@ -1407,605 +1355,3 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _ExpandableHomeFab extends StatefulWidget {
-  final Future<void> Function() onAddExpense;
-  final Future<void> Function() onImportExpenses;
-  final Future<void> Function() onExportExpenses;
-  final Future<void> Function() onDeleteMonthlyExpenses;
-  final Future<void> Function() onDeleteAllYearsExpenses;
-  final bool canDeleteMonthlyExpenses;
-  final bool canDeleteAllYearsExpenses;
-
-  const _ExpandableHomeFab({
-    required this.onAddExpense,
-    required this.onImportExpenses,
-    required this.onExportExpenses,
-    required this.onDeleteMonthlyExpenses,
-    required this.onDeleteAllYearsExpenses,
-    required this.canDeleteMonthlyExpenses,
-    required this.canDeleteAllYearsExpenses,
-  });
-
-  @override
-  State<_ExpandableHomeFab> createState() => _ExpandableHomeFabState();
-}
-
-class _ExpandableHomeFabState extends State<_ExpandableHomeFab> {
-  var _isExpanded = false;
-
-  void _toggle() {
-    setState(() => _isExpanded = !_isExpanded);
-  }
-
-  Future<void> _runAction(Future<void> Function() action) async {
-    setState(() => _isExpanded = false);
-    await action();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
-          switchInCurve: Curves.easeOut,
-          switchOutCurve: Curves.easeIn,
-          child: _isExpanded
-              ? Column(
-                  key: const ValueKey('expanded-actions'),
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    _FabActionRow(
-                      label: 'Add Expense',
-                      icon: Icons.add,
-                      heroTag: 'home-fab-add-expense',
-                      onPressed: () => _runAction(widget.onAddExpense),
-                    ),
-                    const SizedBox(height: 10),
-                    _FabActionRow(
-                      label: 'Import from Excel',
-                      icon: Icons.file_upload_outlined,
-                      heroTag: 'home-fab-import-expenses',
-                      onPressed: () => _runAction(widget.onImportExpenses),
-                    ),
-                    const SizedBox(height: 10),
-                    _FabActionRow(
-                      label: 'Export to Excel',
-                      icon: Icons.file_download_outlined,
-                      heroTag: 'home-fab-export-expenses',
-                      onPressed: () => _runAction(widget.onExportExpenses),
-                    ),
-                    const SizedBox(height: 10),
-                    _FabActionRow(
-                      label: 'Delete Monthly Expense',
-                      icon: Icons.delete_sweep_outlined,
-                      heroTag: 'home-fab-delete-monthly',
-                      backgroundColor: widget.canDeleteMonthlyExpenses
-                          ? theme.colorScheme.errorContainer
-                          : theme.disabledColor.withAlpha(40),
-                      foregroundColor: widget.canDeleteMonthlyExpenses
-                          ? theme.colorScheme.onErrorContainer
-                          : theme.disabledColor,
-                      onPressed: widget.canDeleteMonthlyExpenses
-                          ? () => _runAction(widget.onDeleteMonthlyExpenses)
-                          : null,
-                    ),
-                    const SizedBox(height: 10),
-                    _FabActionRow(
-                      label: 'Delete All Years Expenses',
-                      icon: Icons.delete_forever_outlined,
-                      heroTag: 'home-fab-delete-all-years',
-                      backgroundColor: widget.canDeleteAllYearsExpenses
-                          ? theme.colorScheme.error
-                          : theme.disabledColor.withAlpha(40),
-                      foregroundColor: widget.canDeleteAllYearsExpenses
-                          ? theme.colorScheme.onError
-                          : theme.disabledColor,
-                      onPressed: widget.canDeleteAllYearsExpenses
-                          ? () => _runAction(widget.onDeleteAllYearsExpenses)
-                          : null,
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                )
-              : const SizedBox.shrink(),
-        ),
-        FloatingActionButton(
-          heroTag: 'home-fab-menu-toggle',
-          onPressed: _toggle,
-          child: AnimatedRotation(
-            duration: const Duration(milliseconds: 180),
-            turns: _isExpanded ? 0.125 : 0,
-            child: Icon(_isExpanded ? Icons.close : Icons.menu),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _FabActionRow extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Object heroTag;
-  final VoidCallback? onPressed;
-  final Color? backgroundColor;
-  final Color? foregroundColor;
-
-  const _FabActionRow({
-    required this.label,
-    required this.icon,
-    required this.heroTag,
-    required this.onPressed,
-    this.backgroundColor,
-    this.foregroundColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isEnabled = onPressed != null;
-    final maxLabelWidth = MediaQuery.sizeOf(context).width * 0.62;
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxLabelWidth),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withAlpha(18),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: isEnabled ? null : theme.disabledColor,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        FloatingActionButton.small(
-          heroTag: heroTag,
-          onPressed: onPressed,
-          backgroundColor: backgroundColor,
-          foregroundColor: foregroundColor,
-          child: Icon(icon),
-        ),
-      ],
-    );
-  }
-}
-
-class _MonthSelector extends ConsumerWidget {
-  final DateTime selectedMonth;
-  const _MonthSelector({required this.selectedMonth});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            onPressed: () {
-              ref.read(homeMonthProvider.notifier).state = DateTime(
-                selectedMonth.year,
-                selectedMonth.month - 1,
-              );
-            },
-          ),
-          Text(
-            DateFormat('MMMM yyyy').format(selectedMonth),
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            onPressed: () {
-              final next = DateTime(
-                selectedMonth.year,
-                selectedMonth.month + 1,
-              );
-              if (!next.isAfter(DateTime.now())) {
-                ref.read(homeMonthProvider.notifier).state = next;
-              }
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _BudgetCard extends StatelessWidget {
-  final double totalSpent;
-  final double? budget;
-
-  const _BudgetCard({required this.totalSpent, this.budget});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final hasBudget = budget != null && budget! > 0;
-    final progress = hasBudget ? (totalSpent / budget!).clamp(0.0, 1.0) : 0.0;
-
-    Color progressColor = theme.colorScheme.primary;
-    if (hasBudget) {
-      if (progress >= 1.0) {
-        progressColor = theme.colorScheme.error;
-      } else if (progress >= 0.75) {
-        progressColor = Colors.orange;
-      }
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Total Spent',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
-                  ),
-                  if (hasBudget)
-                    Text(
-                      'Budget: ${formatCurrency(budget!)}',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: theme.colorScheme.outline,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                formatCurrency(totalSpent),
-                style: theme.textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              if (hasBudget) ...[
-                const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 10,
-                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
-                    valueColor: AlwaysStoppedAnimation<Color>(progressColor),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${(progress * 100).toStringAsFixed(0)}% of budget used',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                  ),
-                ),
-              ] else ...[
-                const SizedBox(height: 4),
-                Text(
-                  'No budget set for this month',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ExpenseList extends ConsumerWidget {
-  final List<Expense> expenses;
-  final List<Category> categories;
-
-  const _ExpenseList({required this.expenses, required this.categories});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final categoryById = <String, Category>{
-      for (final c in categories) c.id: c,
-    };
-
-    // Group by date
-    final Map<String, List<Expense>> grouped = {};
-    for (final e in expenses) {
-      final key = formatDayHeader(e.date);
-      grouped.putIfAbsent(key, () => []).add(e);
-    }
-    final dateKeys = grouped.keys.toList();
-
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 80),
-      itemCount: grouped.length,
-      itemBuilder: (context, index) {
-        final dateKey = dateKeys[index];
-        final dayExpenses = grouped[dateKey]!;
-        final dayTotal = dayExpenses.fold(0.0, (sum, e) => sum + e.amount);
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    dateKey,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                  ),
-                  Text(
-                    formatCurrency(dayTotal),
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            ...dayExpenses.map((expense) {
-              final category = categoryById[expense.categoryId];
-              return _ExpenseTile(
-                expense: expense,
-                category: category,
-                ref: ref,
-              );
-            }),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _ExpenseTile extends StatelessWidget {
-  final Expense expense;
-  final Category? category;
-  final WidgetRef ref;
-
-  const _ExpenseTile({
-    required this.expense,
-    required this.category,
-    required this.ref,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = _safeCategoryColor(theme);
-
-    return Dismissible(
-      key: Key(expense.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        color: theme.colorScheme.error,
-        child: Icon(Icons.delete, color: theme.colorScheme.onError),
-      ),
-      confirmDismiss: (_) async {
-        return await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Delete Expense'),
-            content: Text('Delete "${expense.title}"? This cannot be undone.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Delete'),
-              ),
-            ],
-          ),
-        );
-      },
-      onDismissed: (_) {
-        ref.read(expenseProvider.notifier).deleteExpense(expense.id);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('"${expense.title}" deleted')));
-      },
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withAlpha(30),
-          child: Icon(
-            iconFromName(category?.iconName ?? 'more_horiz'),
-            color: color,
-            size: 20,
-          ),
-        ),
-        title: Text(
-          expense.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: category != null
-            ? Text(
-                category!.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
-              )
-            : null,
-        trailing: SizedBox(
-          width: 110,
-          child: Text(
-            formatCurrency(expense.amount),
-            textAlign: TextAlign.end,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AddEditExpenseScreen(expense: expense),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Color _safeCategoryColor(ThemeData theme) {
-    if (category == null) return theme.colorScheme.primary;
-    final parsed = int.tryParse(
-      category!.colorHex.replaceAll('#', ''),
-      radix: 16,
-    );
-    if (parsed == null) return theme.colorScheme.primary;
-    return Color(0xFF000000 | parsed);
-  }
-}
-
-class _AppDrawer extends StatelessWidget {
-  final Future<void> Function() onCreateBackup;
-  final Future<void> Function() onRestoreBackup;
-
-  const _AppDrawer({
-    required this.onCreateBackup,
-    required this.onRestoreBackup,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          DrawerHeader(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                const Icon(
-                  Icons.account_balance_wallet,
-                  color: Colors.white,
-                  size: 40,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Expense Tracker',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(color: Colors.white),
-                ),
-              ],
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.home),
-            title: const Text('Home'),
-            onTap: () => Navigator.pop(context),
-          ),
-          ListTile(
-            leading: const Icon(Icons.bar_chart),
-            title: const Text('Analytics'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.category),
-            title: const Text('Categories'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CategoriesScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.savings),
-            title: const Text('Budget Settings'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const BudgetSettingsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.storage_outlined),
-            title: const Text('Storage Insights'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const StorageInsightsScreen()),
-              );
-            },
-          ),
-          const Divider(height: 1),
-          ListTile(
-            leading: const Icon(Icons.backup_outlined),
-            title: const Text('Create Data Backup'),
-            subtitle: const Text('Create compact delta + refresh latest full backup'),
-            onTap: () {
-              Navigator.pop(context);
-              onCreateBackup();
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.restore_page_outlined),
-            title: const Text('Restore Data Backup'),
-            subtitle: const Text('Restore from Downloads/ExpenseTracker_Backups/'),
-            onTap: () {
-              Navigator.pop(context);
-              onRestoreBackup();
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}

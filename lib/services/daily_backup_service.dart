@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart'
   show kIsWeb, debugPrint, debugPrintStack;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
@@ -14,6 +13,7 @@ import '../models/budget.dart';
 import '../models/category.dart' as cat_model;
 import '../models/expense.dart';
 import '../services/storage_service.dart';
+import '../utils/backup_utils.dart' as backup_utils;
 
 enum BackupRunSource { foregroundApp, backgroundWorker }
 
@@ -114,6 +114,7 @@ class DailyBackupService {
 
   static Future<void> ensureDueBackupExecuted({
     BackupRunSource source = BackupRunSource.foregroundApp,
+    StorageService? storage,
   }) async {
     if (kIsWeb) return;
 
@@ -133,7 +134,7 @@ class DailyBackupService {
 
     int changedItems;
     try {
-      changedItems = await _createOrUpdateDeltaBackup();
+      changedItems = await _createOrUpdateDeltaBackup(storage ?? StorageService());
     } on io.FileSystemException catch (error) {
       debugPrint('Daily backup skipped due to file system access: $error');
       return;
@@ -178,8 +179,7 @@ class DailyBackupService {
     return scheduled;
   }
 
-  static Future<int> _createOrUpdateDeltaBackup() async {
-    final storage = StorageService();
+  static Future<int> _createOrUpdateDeltaBackup(StorageService storage) async {
 
     final expenses = (await storage.loadExpenses()).map((e) => e.toJson()).toList();
     final categories = (await storage.loadCategories()).map((c) => c.toJson()).toList();
@@ -195,20 +195,20 @@ class DailyBackupService {
       'budgets': budgets,
     };
 
-    final backupDir = await _resolveBackupDirectory();
+    final backupDir = await backup_utils.resolveBackupDirectory();
     final previous = await _loadLatestFullBackup(backupDir);
 
     var changedItems = 0;
     if (previous != null) {
-      final expenseDelta = _computeCollectionDelta(
+      final expenseDelta = backup_utils.computeCollectionDelta(
         previous['expenses'] as List<dynamic>? ?? const [],
         expenses,
       );
-      final categoryDelta = _computeCollectionDelta(
+      final categoryDelta = backup_utils.computeCollectionDelta(
         previous['categories'] as List<dynamic>? ?? const [],
         categories,
       );
-      final budgetDelta = _computeCollectionDelta(
+      final budgetDelta = backup_utils.computeCollectionDelta(
         previous['budgets'] as List<dynamic>? ?? const [],
         budgets,
       );
@@ -247,45 +247,29 @@ class DailyBackupService {
             },
           },
         };
-        await deltaFile.writeAsString(
+        await backup_utils.writeEncryptedBackup(
+          deltaFile,
           const JsonEncoder.withIndent('  ').convert(deltaPayload),
         );
       }
     }
 
     final latestFull = io.File('${backupDir.path}/$_latestFullBackupFileName');
-    await latestFull.writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
+    await backup_utils.writeEncryptedBackup(
+      latestFull,
+      const JsonEncoder.withIndent('  ').convert(payload),
+    );
 
     await _pruneOldDeltaBackups(backupDir);
     return changedItems;
   }
 
-  static Future<io.Directory> _resolveBackupDirectory() async {
-    final downloadsPath = await _resolveDownloadsPath();
-    final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
-    await backupDir.create(recursive: true);
-    return backupDir;
-  }
-
-  static Future<String> _resolveDownloadsPath() async {
-    // getDownloadsDirectory() returns the public Downloads folder on Android
-    // (survives uninstall) and ~/Downloads on macOS/desktop. On iOS it returns
-    // null, so we fall back to app documents which is the best available option.
-    final dir = await getDownloadsDirectory();
-    if (dir != null) return dir.path;
-
-    // iOS fallback: app documents directory
-    final fallback = await getApplicationDocumentsDirectory();
-    return fallback.path;
-  }
-
-  /// Returns backup metadata (createdAt, expense/category/budget counts) if a
-  /// full backup file exists in the backup directory, null otherwise.
   static Future<FoundBackupInfo?> findLatestBackup() async {
     if (kIsWeb) return null;
     try {
-      final downloadsPath = await _resolveDownloadsPath();
-      final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
+      final backupDir = io.Directory(
+        '${await backup_utils.resolveDownloadsPath()}/$_backupDirectoryName',
+      );
       if (!await backupDir.exists()) return null;
 
       final payload = await _loadLatestFullBackup(backupDir);
@@ -305,13 +289,12 @@ class DailyBackupService {
     }
   }
 
-  /// Restores data from the latest full backup file into StorageService.
-  /// Returns true on success, false if the file is missing or corrupt.
-  static Future<bool> restoreFromLatestBackup() async {
+  static Future<bool> restoreFromLatestBackup({StorageService? storage}) async {
     if (kIsWeb) return false;
     try {
-      final downloadsPath = await _resolveDownloadsPath();
-      final backupDir = io.Directory('$downloadsPath/$_backupDirectoryName');
+      final backupDir = io.Directory(
+        '${await backup_utils.resolveDownloadsPath()}/$_backupDirectoryName',
+      );
       final payload = await _loadLatestFullBackup(backupDir);
       if (payload == null) return false;
 
@@ -321,14 +304,14 @@ class DailyBackupService {
         return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList().cast<T>();
       }
 
-      final storage = StorageService();
-      await storage.saveCategories(
+      final svc = storage ?? StorageService();
+      await svc.saveCategories(
         asMaps<Map<String, dynamic>>('categories').map(cat_model.Category.fromJson).toList(),
       );
-      await storage.saveBudgets(
+      await svc.saveBudgets(
         asMaps<Map<String, dynamic>>('budgets').map(Budget.fromJson).toList(),
       );
-      await storage.saveExpenses(
+      await svc.saveExpenses(
         asMaps<Map<String, dynamic>>('expenses').map(Expense.fromJson).toList(),
       );
       return true;
@@ -341,10 +324,9 @@ class DailyBackupService {
     io.Directory backupDir,
   ) async {
     final latestFile = io.File('${backupDir.path}/$_latestFullBackupFileName');
-    if (!await latestFile.exists()) return null;
-
     try {
-      final content = await latestFile.readAsString();
+      final content = await backup_utils.readEncryptedBackup(latestFile);
+      if (content == null) return null;
       final decoded = jsonDecode(content);
       if (decoded is! Map<String, dynamic>) return null;
       if (decoded['type'] != 'full') return null;
@@ -352,49 +334,6 @@ class DailyBackupService {
     } catch (_) {
       return null;
     }
-  }
-
-  static ({List<Map<String, dynamic>> upsert, List<String> delete})
-      _computeCollectionDelta(
-    List<dynamic> previous,
-    List<Map<String, dynamic>> current,
-  ) {
-    final prevById = <String, Map<String, dynamic>>{};
-    for (final row in previous) {
-      if (row is Map) {
-        final normalized = Map<String, dynamic>.from(row);
-        final id = normalized['id'];
-        if (id is String && id.isNotEmpty) {
-          prevById[id] = normalized;
-        }
-      }
-    }
-
-    final currentById = <String, Map<String, dynamic>>{};
-    for (final row in current) {
-      final id = row['id'];
-      if (id is String && id.isNotEmpty) {
-        currentById[id] = row;
-      }
-    }
-
-    final upsert = <Map<String, dynamic>>[];
-    final deleted = <String>[];
-
-    for (final entry in currentById.entries) {
-      final previousRow = prevById[entry.key];
-      if (previousRow == null || jsonEncode(previousRow) != jsonEncode(entry.value)) {
-        upsert.add(entry.value);
-      }
-    }
-
-    for (final id in prevById.keys) {
-      if (!currentById.containsKey(id)) {
-        deleted.add(id);
-      }
-    }
-
-    return (upsert: upsert, delete: deleted);
   }
 
   static Future<void> _pruneOldDeltaBackups(io.Directory backupDir) async {

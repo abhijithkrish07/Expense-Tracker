@@ -96,3 +96,49 @@ Future<int> readFileBytesForKey(String key) async {
     return 0;
   }
 }
+
+/// Encrypts [plainText] using the app's AES-256-GCM master key.
+/// Returns the JSON envelope as a UTF-8 byte array (suitable for file writes).
+Future<List<int>> encryptStringToBytes(String plainText) async {
+  final keyMaterial = await _getOrCreateMasterKey();
+  final compressed = gzip.encode(utf8.encode(plainText));
+  final nonce = _algorithm.newNonce();
+
+  final sealed = await _algorithm.encrypt(
+    compressed,
+    secretKey: keyMaterial,
+    nonce: nonce,
+  );
+
+  final envelope = jsonEncode({
+    'v': _storageVersion,
+    'n': base64Encode(sealed.nonce),
+    'c': base64Encode(sealed.cipherText),
+    't': base64Encode(sealed.mac.bytes),
+  });
+
+  return utf8.encode(envelope);
+}
+
+/// Decrypts bytes previously produced by [encryptStringToBytes].
+/// Returns null if decryption fails (wrong key, corrupt data, etc.).
+Future<String?> decryptBytesToString(List<int> bytes) async {
+  try {
+    final envelope = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    if (envelope['v'] != _storageVersion) return null;
+
+    final nonce = base64Decode(envelope['n'] as String);
+    final cipherText = base64Decode(envelope['c'] as String);
+    final macBytes = base64Decode(envelope['t'] as String);
+
+    final keyMaterial = await _getOrCreateMasterKey();
+    final clearBytes = await _algorithm.decrypt(
+      SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+      secretKey: keyMaterial,
+    );
+
+    return utf8.decode(gzip.decode(clearBytes));
+  } catch (_) {
+    return null;
+  }
+}

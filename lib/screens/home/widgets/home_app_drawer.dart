@@ -1,5 +1,4 @@
-// Home app drawer: central navigation hub for home-related routes.
-// Caveat: route navigation uses MaterialPageRoute and does not preserve nested navigation stacks.
+// Home app drawer: central navigation hub with backup/restore actions.
 import 'package:flutter/material.dart';
 
 import '../../analytics/analytics_screen.dart';
@@ -8,7 +7,14 @@ import '../../categories/categories_screen.dart';
 import '../storage_insights_screen.dart';
 
 class HomeAppDrawer extends StatelessWidget {
-  const HomeAppDrawer({super.key});
+  final Future<void> Function() onCreateBackup;
+  final Future<void> Function() onRestoreBackup;
+
+  const HomeAppDrawer({
+    super.key,
+    required this.onCreateBackup,
+    required this.onRestoreBackup,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -86,6 +92,25 @@ class HomeAppDrawer extends StatelessWidget {
                 context,
                 MaterialPageRoute(builder: (_) => const StorageInsightsScreen()),
               );
+            },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('Create Data Backup'),
+            subtitle: const Text('Create compact delta + refresh latest full backup'),
+            onTap: () {
+              Navigator.pop(context);
+              onCreateBackup();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.restore_page_outlined),
+            title: const Text('Restore Data Backup'),
+            subtitle: const Text('Restore from Downloads/ExpenseTracker_Backups/'),
+            onTap: () {
+              Navigator.pop(context);
+              onRestoreBackup();
             },
           ),
         ],

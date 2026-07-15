@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/budget_provider.dart';
 import 'providers/category_provider.dart';
 import 'providers/expense_provider.dart';
+import 'providers/storage_provider.dart';
 import 'providers/theme_provider.dart';
 import 'screens/home/home_screen.dart';
 import 'services/daily_backup_service.dart';
@@ -36,7 +37,9 @@ class _ExpenseTrackerAppState extends ConsumerState<ExpenseTrackerApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      DailyBackupService.ensureDueBackupExecuted();
+      DailyBackupService.ensureDueBackupExecuted(
+        storage: ref.read(storageServiceProvider),
+      );
     }
   }
 
@@ -89,7 +92,9 @@ class _ExpenseTrackerAppState extends ConsumerState<ExpenseTrackerApp>
 
     if (confirmed != true || !mounted) return;
 
-    final ok = await DailyBackupService.restoreFromLatestBackup();
+    final ok = await DailyBackupService.restoreFromLatestBackup(
+      storage: ref.read(storageServiceProvider),
+    );
 
     if (!mounted) return;
     if (ok) {
