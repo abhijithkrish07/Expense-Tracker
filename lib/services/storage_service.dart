@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/expense.dart';
-import '../models/category.dart' as cat_model;
+import '../models/category.dart';
 import '../models/budget.dart';
 
 // Conditional import: use dart:io File on mobile/desktop, stub on web
@@ -124,12 +124,12 @@ class StorageService {
     await _write(_expensesKey, expenses.map((e) => e.toJson()).toList());
   }
 
-  Future<List<cat_model.Category>> loadCategories() async {
+  Future<List<Category>> loadCategories() async {
     final list = await _read(_categoriesKey);
-    final result = <cat_model.Category>[];
+    final result = <Category>[];
     for (final json in list) {
       try {
-        result.add(cat_model.Category.fromJson(json));
+        result.add(Category.fromJson(json));
       } catch (e) {
         debugPrint('Skipping malformed category: $e');
       }
@@ -137,7 +137,7 @@ class StorageService {
     return result;
   }
 
-  Future<void> saveCategories(List<cat_model.Category> categories) async {
+  Future<void> saveCategories(List<Category> categories) async {
     await _write(_categoriesKey, categories.map((c) => c.toJson()).toList());
   }
 

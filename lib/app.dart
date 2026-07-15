@@ -92,12 +92,12 @@ class _ExpenseTrackerAppState extends ConsumerState<ExpenseTrackerApp>
 
     if (confirmed != true || !mounted) return;
 
-    final ok = await DailyBackupService.restoreFromLatestBackup(
+    final result = await DailyBackupService.restoreFromLatestBackup(
       storage: ref.read(storageServiceProvider),
     );
 
     if (!mounted) return;
-    if (ok) {
+    if (result == RestoreResult.success) {
       ref.invalidate(expenseProvider);
       ref.invalidate(categoryProvider);
       ref.invalidate(budgetProvider);
@@ -105,8 +105,14 @@ class _ExpenseTrackerAppState extends ConsumerState<ExpenseTrackerApp>
         const SnackBar(content: Text('Backup restored successfully.')),
       );
     } else {
+      final message = switch (result) {
+        RestoreResult.notFound => 'No backup file was found to restore.',
+        RestoreResult.accessError =>
+          'Could not access the backup file. Check storage permissions.',
+        _ => 'Restore failed. The backup file may be corrupt.',
+      };
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Restore failed. The backup file may be corrupt.')),
+        SnackBar(content: Text(message)),
       );
     }
   }

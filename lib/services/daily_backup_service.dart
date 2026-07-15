@@ -17,6 +17,16 @@ import '../utils/backup_utils.dart' as backup_utils;
 
 enum BackupRunSource { foregroundApp, backgroundWorker }
 
+/// Outcome of a restore attempt, so callers can show a specific message
+/// instead of always blaming a corrupt file.
+enum RestoreResult {
+  success,
+  notFound,
+  corrupt,
+  accessError,
+  unsupportedPlatform,
+}
+
 class FoundBackupInfo {
   final DateTime createdAt;
   final int expenseCount;
@@ -289,14 +299,20 @@ class DailyBackupService {
     }
   }
 
-  static Future<bool> restoreFromLatestBackup({StorageService? storage}) async {
-    if (kIsWeb) return false;
+  static Future<RestoreResult> restoreFromLatestBackup({
+    StorageService? storage,
+  }) async {
+    if (kIsWeb) return RestoreResult.unsupportedPlatform;
     try {
       final backupDir = io.Directory(
         '${await backup_utils.resolveDownloadsPath()}/$_backupDirectoryName',
       );
+      final latestFile =
+          io.File('${backupDir.path}/$_latestFullBackupFileName');
+      if (!await latestFile.exists()) return RestoreResult.notFound;
+
       final payload = await _loadLatestFullBackup(backupDir);
-      if (payload == null) return false;
+      if (payload == null) return RestoreResult.corrupt;
 
       List<T> asMaps<T>(String key) {
         final raw = payload[key];
@@ -314,9 +330,16 @@ class DailyBackupService {
       await svc.saveExpenses(
         asMaps<Map<String, dynamic>>('expenses').map(Expense.fromJson).toList(),
       );
-      return true;
-    } catch (_) {
-      return false;
+      return RestoreResult.success;
+    } on FormatException catch (error) {
+      debugPrint('Restore failed: backup file is corrupt: $error');
+      return RestoreResult.corrupt;
+    } on io.FileSystemException catch (error) {
+      debugPrint('Restore failed: file system access error: $error');
+      return RestoreResult.accessError;
+    } catch (error) {
+      debugPrint('Restore failed: unexpected error: $error');
+      return RestoreResult.corrupt;
     }
   }
 
