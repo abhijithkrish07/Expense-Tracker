@@ -56,7 +56,7 @@ Future<List<Map<String, dynamic>>> readFromFile(String key) async {
     final envelope = jsonDecode(envelopeRaw) as Map<String, dynamic>;
 
     final version = envelope['v'];
-    if (version != _storageVersion) return [];
+    if (version != _storageVersion) throw StorageDecryptionException(key);
 
     final nonce = base64Decode(envelope['n'] as String);
     final cipherText = base64Decode(envelope['c'] as String);
@@ -139,7 +139,11 @@ Future<List<int>> encryptStringToBytes(String plainText) async {
 Future<String?> decryptBytesToString(List<int> bytes) async {
   try {
     final envelope = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-    if (envelope['v'] != _storageVersion) return null;
+    if (envelope['v'] != _storageVersion) {
+      // Version mismatch on a backup file — treat as unreadable, caller falls
+      // back to legacy plain-text path in readEncryptedBackup.
+      return null;
+    }
 
     final nonce = base64Decode(envelope['n'] as String);
     final cipherText = base64Decode(envelope['c'] as String);

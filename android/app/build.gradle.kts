@@ -1,8 +1,17 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -20,6 +29,15 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    signingConfigs {
+        create("release") {
+            keyAlias = keystoreProperties["keyAlias"] as String
+            keyPassword = keystoreProperties["keyPassword"] as String
+            storeFile = file(keystoreProperties["storeFile"] as String)
+            storePassword = keystoreProperties["storePassword"] as String
+        }
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.expensetracker.expense_tracker"
@@ -33,12 +51,8 @@ android {
 
     buildTypes {
         release {
-            // SECURITY: Create a release keystore before publishing:
-            // 1. Run: keytool -genkey -v -keystore ~/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
-            // 2. Create android/key.properties with: storePassword, keyPassword, keyAlias, storeFile
-            // 3. Reference the signing config here instead of debug keys
-            signingConfig = signingConfigs.getByName("debug")
-            
+            signingConfig = signingConfigs.getByName("release")
+
             // Enable code shrinking and obfuscation for release
             isMinifyEnabled = true
             isShrinkResources = true

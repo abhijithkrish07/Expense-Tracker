@@ -54,7 +54,14 @@ class _ExpenseTrackerAppState extends ConsumerState<ExpenseTrackerApp>
     }
 
     // Only prompt when local data is empty (fresh install / cleared app).
-    final expenses = await ref.read(expenseProvider.future);
+    // Wrap in try/catch: StorageDecryptionException here means data is lost
+    // and we should still offer the restore rather than crashing.
+    List<Object?> expenses;
+    try {
+      expenses = await ref.read(expenseProvider.future);
+    } catch (_) {
+      expenses = const [];
+    }
     if (expenses.isNotEmpty) {
       await prefs.setBool(_restorePromptedKey, true);
       return;
