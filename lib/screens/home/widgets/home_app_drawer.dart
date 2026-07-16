@@ -12,8 +12,7 @@ class HomeAppDrawer extends StatelessWidget {
   final bool canDeleteMonthlyExpenses;
   final bool canDeleteAllYearsExpenses;
   final Future<void> Function() onExportExpenses;
-  final Future<void> Function() onCreateBackup;
-  final Future<void> Function() onRestoreBackup;
+  final Future<void> Function() onImportFromExcel;
   final Future<void> Function() onDeleteMonthlyExpenses;
   final Future<void> Function() onDeleteAllYearsExpenses;
 
@@ -23,8 +22,7 @@ class HomeAppDrawer extends StatelessWidget {
     required this.canDeleteMonthlyExpenses,
     required this.canDeleteAllYearsExpenses,
     required this.onExportExpenses,
-    required this.onCreateBackup,
-    required this.onRestoreBackup,
+    required this.onImportFromExcel,
     required this.onDeleteMonthlyExpenses,
     required this.onDeleteAllYearsExpenses,
   });
@@ -115,21 +113,12 @@ class HomeAppDrawer extends StatelessWidget {
                   },
                 ),
                 _DrawerItem(
-                  icon: Icons.backup_outlined,
-                  label: 'Create Backup',
-                  subtitle: 'Delta + refresh latest full backup',
+                  icon: Icons.file_upload_outlined,
+                  label: 'Import from Excel',
+                  subtitle: 'Add expenses from an exported .xlsx',
                   onTap: () {
                     Navigator.pop(context);
-                    onCreateBackup();
-                  },
-                ),
-                _DrawerItem(
-                  icon: Icons.restore_page_outlined,
-                  label: 'Restore Backup',
-                  subtitle: 'Select ExpenseTracker_Backup_Latest.json',
-                  onTap: () {
-                    Navigator.pop(context);
-                    onRestoreBackup();
+                    onImportFromExcel();
                   },
                 ),
                 const SizedBox(height: 8),

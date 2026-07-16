@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
+import 'package:uuid/uuid.dart';
 import '../../models/expense.dart';
 import '../../models/category.dart';
 import '../../models/budget.dart';
@@ -15,9 +16,9 @@ import '../../providers/expense_provider.dart';
 import '../../providers/category_provider.dart';
 import '../../providers/budget_provider.dart';
 import '../../providers/home_provider.dart';
-import '../../providers/storage_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../utils/backup_utils.dart' as backup_utils;
+import '../../utils/excel_import.dart';
 import '../../services/storage_service_io.dart' show StorageDecryptionException;
 import '../../widgets/empty_state_widget.dart';
 import '../analytics/analytics_screen.dart';
@@ -100,6 +101,19 @@ class HomeScreen extends ConsumerWidget {
   static const _backupSchemaVersion = 1;
   static const _latestFullBackupFileName = 'ExpenseTracker_Backup_Latest.json';
   static const _maxDeltaBackupFiles = 24;
+
+  // Palette reused for auto-created categories during Excel import; mirrors the
+  // colors in assets/default_categories.json.
+  static const _importCategoryPalette = <String>[
+    '#FF6384',
+    '#36A2EB',
+    '#FFCE56',
+    '#4BC0C0',
+    '#9966FF',
+    '#FF9F40',
+    '#00CC99',
+    '#C9CBCF',
+  ];
 
   static String _humanCount(int value, String noun) {
     return '$value $noun${value == 1 ? '' : 's'}';
@@ -262,164 +276,6 @@ class HomeScreen extends ConsumerWidget {
                       'Updated $changedItems item${changedItems == 1 ? '' : 's'}.',
         ),
       ),
-    );
-  }
-
-  static Future<void> _restoreFromBackup(
-    BuildContext context,
-    WidgetRef ref,
-  ) async {
-    // Wait for the drawer close animation before showing any overlay.
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-    if (!context.mounted) return;
-
-    if (!kIsWeb) {
-      final proceed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Find Your Backup File'),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Your backup files are saved in:'),
-              SizedBox(height: 8),
-              Text(
-                'Downloads/ExpenseTracker_Backups/',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              SizedBox(height: 12),
-              Text('Select this file to restore:'),
-              SizedBox(height: 8),
-              Text(
-                'ExpenseTracker_Backup_Latest.json',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              SizedBox(height: 12),
-              Text(
-                'Note: Delta backup files (ending in _Delta_…) cannot be used for restore.',
-                style: TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Choose File'),
-            ),
-          ],
-        ),
-      );
-      if (proceed != true) return;
-      if (!context.mounted) return;
-    }
-
-    // Capture current counts before the async file picker gap.
-    final currentExpenseCount = ref.read(expenseProvider).valueOrNull?.length ?? 0;
-    final currentCategoryCount = ref.read(categoryProvider).valueOrNull?.length ?? 0;
-    final currentBudgetCount = ref.read(budgetProvider).valueOrNull?.length ?? 0;
-    final storage = ref.read(storageServiceProvider);
-
-    final picked = await FilePicker.platform.pickFiles(
-      type: kIsWeb ? FileType.any : FileType.custom,
-      allowedExtensions: kIsWeb ? null : ['json'],
-      withData: true,
-    );
-    if (picked == null) return;
-
-    final bytes = picked.files.single.bytes;
-    if (bytes == null) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not read selected backup file.')),
-      );
-      return;
-    }
-
-    _AppBackupPayload? payload;
-    List<Expense> expenses;
-    List<Category> categories;
-    List<Budget> budgets;
-
-    try {
-      final decoded = jsonDecode(utf8.decode(bytes));
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException('Invalid backup structure');
-      }
-
-      if (decoded['type'] == 'delta') {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Delta backup selected. Choose ExpenseTracker_Backup_Latest.json to restore.',
-            ),
-          ),
-        );
-        return;
-      }
-
-      payload = _AppBackupPayload.tryParse(decoded);
-      if (payload == null) {
-        throw const FormatException('Invalid backup payload');
-      }
-
-      expenses = payload.expenses.map(Expense.fromJson).toList();
-      categories = payload.categories.map(Category.fromJson).toList();
-      budgets = payload.budgets.map(Budget.fromJson).toList();
-    } catch (_) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid backup file.')),
-      );
-      return;
-    }
-
-    if (!context.mounted) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Restore Backup'),
-        content: Text(
-          'This will replace your current local data.\n\n'
-          'Current: ${_humanCount(currentExpenseCount, 'expense')}, '
-          '${_humanCount(currentCategoryCount, 'category')}, '
-          '${_humanCount(currentBudgetCount, 'budget')}\n'
-          'Backup: ${_humanCount(expenses.length, 'expense')}, '
-          '${_humanCount(categories.length, 'category')}, '
-          '${_humanCount(budgets.length, 'budget')}\n\n'
-          'Backup date: ${DateFormat('dd MMM yyyy, HH:mm').format(payload!.createdAt)}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Restore'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    await storage.saveCategories(categories);
-    await storage.saveBudgets(budgets);
-    await storage.saveExpenses(expenses);
-
-    ref.read(categoryProvider.notifier).restoreFrom(categories);
-    ref.read(budgetProvider.notifier).restoreFrom(budgets);
-    ref.read(expenseProvider.notifier).restoreFrom(expenses);
-
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Backup restored successfully.')),
     );
   }
 
@@ -801,6 +657,188 @@ class HomeScreen extends ConsumerWidget {
     }
   }
 
+  Future<void> _importFromExcel(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    // Wait for the drawer close animation before showing any overlay.
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!context.mounted) return;
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import from Excel'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Select an .xlsx file previously created with "Export to Excel".',
+            ),
+            SizedBox(height: 12),
+            Text(
+              'Imported expenses are ADDED to your current data — nothing is '
+              'replaced or deleted. Categories are matched by name and created '
+              'if they don\'t exist yet.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Choose File'),
+          ),
+        ],
+      ),
+    );
+    if (proceed != true) return;
+    if (!context.mounted) return;
+
+    final picked = await FilePicker.platform.pickFiles(
+      type: kIsWeb ? FileType.any : FileType.custom,
+      allowedExtensions: kIsWeb ? null : ['xlsx'],
+      withData: true,
+    );
+    if (picked == null) return;
+
+    final bytes = picked.files.single.bytes;
+    if (bytes == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not read the selected file.')),
+      );
+      return;
+    }
+
+    ParseResult parsed;
+    try {
+      parsed = parseExpenseWorkbook(bytes);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not read Excel file.')),
+      );
+      return;
+    }
+
+    if (parsed.rows.isEmpty) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No expense rows found in the selected file.'),
+        ),
+      );
+      return;
+    }
+
+    // Determine which category names are new (case-insensitive) so we can tell
+    // the user before importing.
+    final existingCategories =
+        ref.read(categoryProvider).valueOrNull ?? <Category>[];
+    final existingByLowerName = <String, Category>{
+      for (final c in existingCategories) c.name.toLowerCase().trim(): c,
+    };
+    final importedNames = <String>{
+      for (final row in parsed.rows) row.categoryName.trim(),
+    };
+    final newNames = importedNames
+        .where((name) => !existingByLowerName.containsKey(name.toLowerCase()))
+        // "Uncategorized" reuses an existing "Other" category if present.
+        .where(
+          (name) => !(name.toLowerCase() == 'uncategorized' &&
+              existingByLowerName.containsKey('other')),
+        )
+        .toList();
+
+    if (!context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Expenses'),
+        content: Text(
+          'This will ADD to your current data (nothing is replaced).\n\n'
+          'Importing: ${_humanCount(parsed.rows.length, 'expense')}\n'
+          'New categories to create: ${newNames.length}'
+          '${parsed.skipped > 0 ? '\n\n(${_humanCount(parsed.skipped, 'row')} skipped: headers, subtotals, or unrecognized rows.)' : ''}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    // Resolve every imported category name to a category id, creating missing
+    // ones. Build the lookup incrementally so duplicate names within the import
+    // reuse the same created category.
+    final resolvedIdByLowerName = <String, String>{
+      for (final entry in existingByLowerName.entries) entry.key: entry.value.id,
+    };
+    var createdCount = 0;
+    var paletteIndex = existingCategories.length;
+
+    for (final name in importedNames) {
+      final lower = name.toLowerCase();
+      if (resolvedIdByLowerName.containsKey(lower)) continue;
+
+      // Map "Uncategorized" onto an existing "Other" category when available.
+      if (lower == 'uncategorized' && resolvedIdByLowerName.containsKey('other')) {
+        resolvedIdByLowerName[lower] = resolvedIdByLowerName['other']!;
+        continue;
+      }
+
+      final color = _importCategoryPalette[
+          paletteIndex % _importCategoryPalette.length];
+      paletteIndex++;
+      final created = await ref.read(categoryProvider.notifier).addCategory(
+            name: name.isEmpty ? 'Uncategorized' : name,
+            colorHex: color,
+            iconName: 'more_horiz',
+          );
+      resolvedIdByLowerName[lower] = created.id;
+      createdCount++;
+    }
+
+    const uuid = Uuid();
+    final expenses = parsed.rows.map((row) {
+      final categoryId =
+          resolvedIdByLowerName[row.categoryName.toLowerCase()] ?? '';
+      return Expense(
+        id: uuid.v4(),
+        title: row.title,
+        amount: row.amount,
+        date: row.date,
+        categoryId: categoryId,
+      );
+    }).toList();
+
+    await ref.read(expenseProvider.notifier).addExpensesBulk(expenses);
+
+    if (!context.mounted) return;
+    final createdLabel =
+        '$createdCount new categor${createdCount == 1 ? 'y' : 'ies'}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Imported ${_humanCount(expenses.length, 'expense')}'
+          '${createdCount > 0 ? ' ($createdLabel).' : '.'}',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selectedMonth = ref.watch(homeMonthProvider);
@@ -850,8 +888,7 @@ class HomeScreen extends ConsumerWidget {
         canDeleteAllYearsExpenses:
             (expensesAsync.valueOrNull ?? const []).isNotEmpty,
         onExportExpenses: () => _exportExpensesToExcel(context, ref),
-        onCreateBackup: () => _createRecoveryBackup(context, ref),
-        onRestoreBackup: () => _restoreFromBackup(context, ref),
+        onImportFromExcel: () => _importFromExcel(context, ref),
         onDeleteMonthlyExpenses: () =>
             _deleteMonthlyExpenses(context, ref, selectedMonth),
         onDeleteAllYearsExpenses: () => _deleteAllYearsExpenses(context, ref),
@@ -876,7 +913,7 @@ class HomeScreen extends ConsumerWidget {
                     const SizedBox(height: 8),
                     const Text(
                       'The encryption key may have been lost (e.g. after a device reset). '
-                      'If you have a backup, use Restore Backup from the menu.',
+                      'If you have an Excel export, use Import from Excel from the menu.',
                       textAlign: TextAlign.center,
                     ),
                   ],
